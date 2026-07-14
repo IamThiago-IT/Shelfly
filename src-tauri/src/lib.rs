@@ -3,15 +3,19 @@ mod db;
 use db::{Book, Bookmark, ReadingSession};
 use rusqlite::Connection;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager};
 
 struct AppState {
     db: Mutex<Connection>,
 }
 
-fn get_db(app: &AppHandle) -> tauri::Result<std::sync::MutexGuard<'_, Connection>> {
+fn with_db<T, F>(app: &AppHandle, f: F) -> Result<T, String>
+where
+    F: FnOnce(&Connection) -> rusqlite::Result<T>,
+{
     let state = app.state::<AppState>();
-    Ok(state.db.lock().unwrap())
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    f(&db).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -22,68 +26,57 @@ fn get_app_data_dir(app: AppHandle) -> String {
 
 #[tauri::command]
 fn add_book(app: AppHandle, book: Book) -> Result<(), String> {
-    let db = get_db(&app).map_err(|e| e.to_string())?;
-    db::import_book(&db, &book).map_err(|e| e.to_string())
+    with_db(&app, |db| db::import_book(db, &book))
 }
 
 #[tauri::command]
 fn get_library(app: AppHandle) -> Result<Vec<Book>, String> {
-    let db = get_db(&app).map_err(|e| e.to_string())?;
-    db::get_all_books(&db).map_err(|e| e.to_string())
+    with_db(&app, db::get_all_books)
 }
 
 #[tauri::command]
 fn get_book(app: AppHandle, id: String) -> Result<Option<Book>, String> {
-    let db = get_db(&app).map_err(|e| e.to_string())?;
-    db::get_book(&db, &id).map_err(|e| e.to_string())
+    with_db(&app, |db| db::get_book(db, &id))
 }
 
 #[tauri::command]
 fn remove_book(app: AppHandle, id: String) -> Result<(), String> {
-    let db = get_db(&app).map_err(|e| e.to_string())?;
-    db::remove_book(&db, &id).map_err(|e| e.to_string())
+    with_db(&app, |db| db::remove_book(db, &id))
 }
 
 #[tauri::command]
 fn save_progress(app: AppHandle, book_id: String, current_page: i64, total_pages: i64) -> Result<(), String> {
-    let db = get_db(&app).map_err(|e| e.to_string())?;
-    db::update_progress(&db, &book_id, current_page, total_pages).map_err(|e| e.to_string())
+    with_db(&app, |db| db::update_progress(db, &book_id, current_page, total_pages))
 }
 
 #[tauri::command]
 fn add_bookmark(app: AppHandle, bookmark: Bookmark) -> Result<(), String> {
-    let db = get_db(&app).map_err(|e| e.to_string())?;
-    db::add_bookmark(&db, &bookmark).map_err(|e| e.to_string())
+    with_db(&app, |db| db::add_bookmark(db, &bookmark))
 }
 
 #[tauri::command]
 fn remove_bookmark(app: AppHandle, id: String) -> Result<(), String> {
-    let db = get_db(&app).map_err(|e| e.to_string())?;
-    db::remove_bookmark(&db, &id).map_err(|e| e.to_string())
+    with_db(&app, |db| db::remove_bookmark(db, &id))
 }
 
 #[tauri::command]
 fn get_bookmarks(app: AppHandle, book_id: String) -> Result<Vec<Bookmark>, String> {
-    let db = get_db(&app).map_err(|e| e.to_string())?;
-    db::get_bookmarks(&db, &book_id).map_err(|e| e.to_string())
+    with_db(&app, |db| db::get_bookmarks(db, &book_id))
 }
 
 #[tauri::command]
 fn get_reading_session(app: AppHandle, book_id: String) -> Result<Option<ReadingSession>, String> {
-    let db = get_db(&app).map_err(|e| e.to_string())?;
-    db::get_reading_session(&db, &book_id).map_err(|e| e.to_string())
+    with_db(&app, |db| db::get_reading_session(db, &book_id))
 }
 
 #[tauri::command]
 fn export_backup(app: AppHandle) -> Result<String, String> {
-    let db = get_db(&app).map_err(|e| e.to_string())?;
-    db::export_all_data(&db).map_err(|e| e.to_string())
+    with_db(&app, db::export_all_data)
 }
 
 #[tauri::command]
 fn import_backup(app: AppHandle, data: String) -> Result<(), String> {
-    let db = get_db(&app).map_err(|e| e.to_string())?;
-    db::import_all_data(&db, &data).map_err(|e| e.to_string())
+    with_db(&app, |db| db::import_all_data(db, &data))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

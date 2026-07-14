@@ -259,25 +259,119 @@ pub fn export_all_data(conn: &Connection) -> Result<String> {
         "readingSessions": all_sessions,
     });
 
-    Ok(serde_json::to_string_pretty(&data)?)
+    serde_json::to_string_pretty(&data)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
 }
 
 pub fn import_all_data(conn: &Connection, json_data: &str) -> Result<()> {
-    let data: serde_json::Value = serde_json::from_str(json_data)?;
+    let data: serde_json::Value = serde_json::from_str(json_data)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
 
     if let Some(books) = data["books"].as_array() {
         for book_val in books {
-            let book: Book = serde_json::from_value(book_val.clone())?;
+            let book: Book = serde_json::from_value(book_val.clone())
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
             import_book(conn, &book)?;
         }
     }
 
     if let Some(bookmarks) = data["bookmarks"].as_array() {
         for bm_val in bookmarks {
-            let bm: Bookmark = serde_json::from_value(bm_val.clone())?;
+            let bm: Bookmark = serde_json::from_value(bm_val.clone())
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
             add_bookmark(conn, &bm)?;
         }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup_conn() -> Connection {
+        let conn = Connection::open_in_memory().expect("failed to open in-memory db");
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS books (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                author TEXT NOT NULL DEFAULT 'Unknown',
+                file_path TEXT NOT NULL,
+                total_pages INTEGER NOT NULL DEFAULT 0,
+                current_page INTEGER NOT NULL DEFAULT 0,
+                progress REAL NOT NULL DEFAULT 0.0,
+                last_read TEXT,
+                added_at TEXT NOT NULL,
+                cover_thumbnail TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS bookmarks (
+                id TEXT PRIMARY KEY,
+                book_id TEXT NOT NULL,
+                page INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS reading_sessions (
+                book_id TEXT PRIMARY KEY,
+                current_page INTEGER NOT NULL DEFAULT 1,
+                scroll_position REAL NOT NULL DEFAULT 0.0,
+                scale REAL NOT NULL DEFAULT 1.0,
+                rotation INTEGER NOT NULL DEFAULT 0,
+                last_read TEXT NOT NULL,
+                FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+            );
+            "
+        )
+        .expect("failed to initialize schema");
+        conn
+    }
+
+    #[test]
+    fn export_and_import_data_roundtrip() {
+        let conn = setup_conn();
+        let book = Book {
+            id: "book-1".into(),
+            title: "Book".into(),
+            author: "Author".into(),
+            file_path: "/tmp/book.pdf".into(),
+            total_pages: 100,
+            current_page: 10,
+            progress: 10.0,
+            last_read: Some("2026-01-01T00:00:00Z".into()),
+            added_at: "2026-01-01T00:00:00Z".into(),
+            cover_thumbnail: None,
+        };
+        import_book(&conn, &book).expect("failed to import book");
+        add_bookmark(
+            &conn,
+            &Bookmark {
+                id: "bm-1".into(),
+                book_id: "book-1".into(),
+                page: 10,
+                title: "Start".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+            },
+        )
+        .expect("failed to insert bookmark");
+
+        let exported = export_all_data(&conn).expect("failed to export");
+        conn.execute("DELETE FROM bookmarks", []).expect("cleanup bookmarks");
+        conn.execute("DELETE FROM books", []).expect("cleanup books");
+
+        import_all_data(&conn, &exported).expect("failed to import backup");
+        assert_eq!(get_all_books(&conn).expect("books").len(), 1);
+        assert_eq!(get_bookmarks(&conn, "book-1").expect("bookmarks").len(), 1);
+    }
+
+    #[test]
+    fn import_all_data_rejects_invalid_json() {
+        let conn = setup_conn();
+        let result = import_all_data(&conn, "{not-json}");
+        assert!(result.is_err());
+    }
 }
