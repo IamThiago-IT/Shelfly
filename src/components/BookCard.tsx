@@ -1,8 +1,9 @@
-import { BookOpen, MoreHorizontal, Trash2, BookmarkPlus } from 'lucide-react'
-import { useState } from 'react'
+import { BookOpen, MoreHorizontal, Trash2, BookmarkPlus, Download, Check, Loader2 } from 'lucide-react'
+import { useState, useEffect } from 'react'
 import type { Book } from '../types'
 import { formatDate } from '../lib/utils'
 import { useAppStore } from '../store/appStore'
+import { isTauri } from '../lib/tauri'
 import { Card } from './ui/card'
 import { Button } from './ui/button'
 import { Badge } from './ui/badge'
@@ -22,7 +23,34 @@ export function BookCard({ book }: BookCardProps) {
   const openBook = useAppStore((s) => s.openBook)
   const removeBook = useAppStore((s) => s.removeBook)
   const addBookmark = useAppStore((s) => s.addBookmark)
+  const saveBookOffline = useAppStore((s) => s.saveBookOffline)
+  const removeBookOffline = useAppStore((s) => s.removeBookOffline)
+  const isBookAvailableOffline = useAppStore((s) => s.isBookAvailableOffline)
   const [imgError, setImgError] = useState(false)
+  const [isOffline, setIsOffline] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!isTauri()) {
+      isBookAvailableOffline(book.id).then(setIsOffline)
+    }
+  }, [book.id, isBookAvailableOffline])
+
+  async function handleToggleOffline() {
+    setSaving(true)
+    try {
+      if (isOffline) {
+        await removeBookOffline(book.id)
+        setIsOffline(false)
+      } else {
+        await saveBookOffline(book.id)
+        setIsOffline(true)
+      }
+    } catch (error) {
+      console.error('Failed to toggle offline:', error)
+    }
+    setSaving(false)
+  }
 
   return (
     <Card className="group overflow-hidden transition-all duration-300 hover:shadow-lg hover:shadow-primary/5 hover:-translate-y-0.5 cursor-pointer border-border/50">
@@ -58,6 +86,12 @@ export function BookCard({ book }: BookCardProps) {
             {book.progress > 0 && (
               <Badge variant={book.progress === 100 ? 'success' : 'progress'}>
                 {book.progress}%
+              </Badge>
+            )}
+            {isOffline && (
+              <Badge variant="secondary" className="ml-1 bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20">
+                <Check className="w-3 h-3 mr-1" />
+                Offline
               </Badge>
             )}
           </div>
@@ -116,6 +150,24 @@ export function BookCard({ book }: BookCardProps) {
               <BookmarkPlus className="w-4 h-4 mr-2" />
               Add Bookmark
             </DropdownMenuItem>
+            {!isTauri() && (
+              <DropdownMenuItem
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleToggleOffline()
+                }}
+                disabled={saving}
+              >
+                {saving ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : isOffline ? (
+                  <Check className="w-4 h-4 mr-2" />
+                ) : (
+                  <Download className="w-4 h-4 mr-2" />
+                )}
+                {saving ? 'Saving...' : isOffline ? 'Saved Offline' : 'Save Offline'}
+              </DropdownMenuItem>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem
               className="text-destructive focus:text-destructive"

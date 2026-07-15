@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { Book, Bookmark, ViewMode, SortBy, Theme, View, ReadingSession } from '../types'
 import { generateId } from '../lib/utils'
+import { savePDF, deletePDF, hasPDF, saveMetadata, deleteMetadata } from '../lib/pdfStorage'
+import { isTauri, readFileAsArrayBuffer } from '../lib/tauri'
 
 interface AppState {
   currentView: View
@@ -54,6 +56,10 @@ interface AppState {
   getCurrentBook: () => Book | undefined
   getRecentBooks: () => Book[]
   getBookmarksForBook: (bookId: string) => Bookmark[]
+
+  saveBookOffline: (bookId: string) => Promise<void>
+  removeBookOffline: (bookId: string) => Promise<void>
+  isBookAvailableOffline: (bookId: string) => Promise<boolean>
 }
 
 export const useAppStore = create<AppState>()(
@@ -259,6 +265,45 @@ export const useAppStore = create<AppState>()(
         return get()
           .bookmarks.filter((bm) => bm.bookId === bookId)
           .sort((a, b) => a.page - b.page)
+      },
+
+      saveBookOffline: async (bookId) => {
+        const book = get().books.find((b) => b.id === bookId)
+        if (!book || isTauri()) return
+
+        try {
+          const arrayBuffer = await readFileAsArrayBuffer(book.filePath)
+          await savePDF(bookId, arrayBuffer)
+          await saveMetadata({
+            id: bookId,
+            title: book.title,
+            author: book.author,
+            totalPages: book.totalPages,
+            coverThumbnail: book.coverThumbnail,
+            savedAt: new Date().toISOString(),
+          })
+        } catch (error) {
+          console.error("Failed to save PDF offline:", error)
+        }
+      },
+
+      removeBookOffline: async (bookId) => {
+        if (isTauri()) return
+        try {
+          await deletePDF(bookId)
+          await deleteMetadata(bookId)
+        } catch (error) {
+          console.error("Failed to remove PDF offline:", error)
+        }
+      },
+
+      isBookAvailableOffline: async (bookId) => {
+        if (isTauri()) return false
+        try {
+          return await hasPDF(bookId)
+        } catch {
+          return false
+        }
       },
     }),
     {

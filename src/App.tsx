@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { Layout } from './components/Layout'
+import { InstallPrompt } from './components/InstallPrompt'
 import { useAppStore } from './store/appStore'
 import { initTauri, isTauri } from './lib/tauri'
 
@@ -36,7 +37,12 @@ function App() {
     }
   }, [theme])
 
-  return <Layout />
+  return (
+    <>
+      <Layout />
+      {!isTauri() && <InstallPrompt />}
+    </>
+  )
 }
 
 export default App

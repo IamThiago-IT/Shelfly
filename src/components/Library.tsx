@@ -5,6 +5,7 @@ import { BookCard } from './BookCard'
 import { generateId } from '../lib/utils'
 import { getPDFMeta, generateThumbnail } from '../lib/pdf'
 import { isTauri, pickPDFFiles, copyFileToAppDir } from '../lib/tauri'
+import { savePDF, saveMetadata } from '../lib/pdfStorage'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import {
@@ -61,8 +62,23 @@ export function Library() {
       try {
         const meta = await getPDFMeta(filePath)
         const thumbnail = await generateThumbnail(filePath, 150)
+        const bookId = generateId()
+
+        if (!isTauri()) {
+          const arrayBuffer = await file.arrayBuffer()
+          await savePDF(bookId, arrayBuffer)
+          await saveMetadata({
+            id: bookId,
+            title: meta.title,
+            author: meta.author,
+            totalPages: meta.totalPages,
+            coverThumbnail: thumbnail || undefined,
+            savedAt: new Date().toISOString(),
+          })
+        }
+
         newBooks.push({
-          id: generateId(),
+          id: bookId,
           title: meta.title,
           author: meta.author,
           filePath,

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import {
   ZoomIn, ZoomOut, RotateCw, Sun, Moon, Bookmark,
   ChevronLeft, ChevronRight, Maximize, Minimize,
-  LayoutGrid, AlignJustify, BookmarkPlus, ArrowLeft,
+  LayoutGrid, AlignJustify, BookmarkPlus, ArrowLeft, WifiOff,
 } from 'lucide-react'
 import * as pdfjsLib from 'pdfjs-dist'
 import { useAppStore } from '../store/appStore'
@@ -21,6 +21,9 @@ import {
   DialogDescription,
   DialogFooter,
 } from './ui/dialog'
+import { useOnlineStatus } from '../hooks/useOnlineStatus'
+import { getPDF } from '../lib/pdfStorage'
+import { isTauri } from '../lib/tauri'
 
 export function Reader() {
   const currentBook = useAppStore((s) => s.getCurrentBook())
@@ -42,6 +45,7 @@ export function Reader() {
   const renderedPagesRef = useRef<Set<number>>(new Set())
 
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [controlsVisible, setControlsVisible] = useState(true)
   const [showSidebar, setShowSidebar] = useState(false)
@@ -51,6 +55,7 @@ export function Reader() {
   const [showPageDialog, setShowPageDialog] = useState(false)
   const [pageInput, setPageInput] = useState('')
   const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const { isOffline } = useOnlineStatus()
 
   const bookmarks = currentBookId ? getBookmarksForBook(currentBookId) : []
 
@@ -59,8 +64,23 @@ export function Reader() {
 
     const loadPDF = async () => {
       setLoading(true)
+      setError(null)
       try {
-        const loadingTask = pdfjsLib.getDocument(currentBook.filePath)
+        let filePath = currentBook.filePath
+
+        if (!isTauri() && isOffline) {
+          const cachedPDF = await getPDF(currentBook.id)
+          if (cachedPDF) {
+            const blob = new Blob([cachedPDF], { type: 'application/pdf' })
+            filePath = URL.createObjectURL(blob)
+          } else {
+            setError('PDF not available offline')
+            setLoading(false)
+            return
+          }
+        }
+
+        const loadingTask = pdfjsLib.getDocument(filePath)
         const doc = await loadingTask.promise
         pdfDocRef.current = doc
         setTotalPages(doc.numPages)
@@ -72,6 +92,7 @@ export function Reader() {
         await renderPages(startPage)
       } catch (err) {
         console.error('Failed to load PDF:', err)
+        setError('Failed to load PDF')
       }
       setLoading(false)
     }
@@ -82,7 +103,7 @@ export function Reader() {
       pdfDocRef.current = null
       renderedPagesRef.current.clear()
     }
-  }, [currentBook?.id])
+  }, [currentBook?.id, isOffline])
 
   useEffect(() => {
     if (!currentBookId || !currentBook) return
@@ -223,6 +244,24 @@ export function Reader() {
     return (
       <div className="flex-1 flex items-center justify-center">
         <p className="text-muted-foreground">No book selected</p>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3 text-center">
+          <WifiOff className="w-12 h-12 text-muted-foreground" />
+          <p className="text-lg font-medium text-foreground">{error}</p>
+          <p className="text-sm text-muted-foreground max-w-sm">
+            This PDF is not available offline. Please connect to the internet to load it, or save it for offline reading from the library.
+          </p>
+          <Button onClick={closeBook} className="mt-2">
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Back to Library
+          </Button>
+        </div>
       </div>
     )
   }

@@ -48,6 +48,15 @@ export async function readFileAsDataUrl(filePath: string): Promise<string> {
   return URL.createObjectURL(blob)
 }
 
+export async function readFileAsArrayBuffer(filePath: string): Promise<ArrayBuffer> {
+  if (!isTauri() || !fsApi) {
+    const response = await fetch(filePath)
+    return response.arrayBuffer()
+  }
+  const bytes = await fsApi.readFile(filePath)
+  return bytes.buffer
+}
+
 export async function invokeTauri<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (!tauriApi) throw new Error('Tauri API not initialized')
   return tauriApi.invoke<T>(cmd, args)
