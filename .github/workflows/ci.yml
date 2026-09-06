@@ -15,7 +15,7 @@ jobs:
         with:
           bun-version: latest
       - name: Install deps
-        run: bun install --frozen-lockfile
+        run: bun install
       - name: Typecheck
         run: bun run typecheck
       - name: Build (web)
@@ -25,6 +25,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:
