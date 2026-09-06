@@ -53,4 +53,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          releaseId: ${{ github.event.release.id }}
+          tagName: ${{ github.ref_name }}
+          releaseName: "Shelfly ${{ github.ref_name }}"
+          releaseBody: "See assets below"
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }}

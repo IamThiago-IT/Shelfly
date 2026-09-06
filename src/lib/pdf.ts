@@ -1,6 +1,9 @@
 import * as pdfjsLib from 'pdfjs-dist'
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`
+if (typeof window !== 'undefined') {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
+}
 
 export interface PDFMeta {
   title: string
@@ -9,7 +12,16 @@ export interface PDFMeta {
 }
 
 export async function loadPDFDocument(filePath: string): Promise<pdfjsLib.PDFDocumentProxy> {
-  const loadingTask = pdfjsLib.getDocument(filePath)
+  const loadingTask = pdfjsLib.getDocument({
+    url: filePath,
+    cMapUrl: `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/cmaps/`,
+    cMapPacked: true,
+  })
+  return loadingTask.promise
+}
+
+export async function loadPDFDocumentFromBuffer(data: ArrayBuffer): Promise<pdfjsLib.PDFDocumentProxy> {
+  const loadingTask = pdfjsLib.getDocument({ data })
   return loadingTask.promise
 }
 

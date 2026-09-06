@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { Layout } from './components/Layout'
 import { InstallPrompt } from './components/InstallPrompt'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { useAppStore } from './store/appStore'
 import { initTauri, isTauri } from './lib/tauri'
 
@@ -38,10 +39,10 @@ function App() {
   }, [theme])
 
   return (
-    <>
+    <ErrorBoundary>
       <Layout />
       {!isTauri() && <InstallPrompt />}
-    </>
+    </ErrorBoundary>
   )
 }
 

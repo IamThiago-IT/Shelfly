@@ -31,4 +31,4 @@ export interface ReadingSession {
 export type ViewMode = 'continuous' | 'single'
 export type SortBy = 'lastRead' | 'title' | 'progress'
 export type Theme = 'system' | 'light' | 'dark'
-export type View = 'library' | 'reader'
+export type View = 'library' | 'reader' | 'recent' | 'bookmarks'

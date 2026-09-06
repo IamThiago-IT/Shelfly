@@ -32,9 +32,15 @@ export function BookCard({ book }: BookCardProps) {
 
   useEffect(() => {
     if (!isTauri()) {
-      isBookAvailableOffline(book.id).then(setIsOffline)
+      let alive = true
+      isBookAvailableOffline(book.id).then((v) => {
+        if (alive) setIsOffline(v)
+      })
+      return () => {
+        alive = false
+      }
     }
-  }, [book.id, isBookAvailableOffline])
+  }, [book.id])
 
   async function handleToggleOffline() {
     setSaving(true)
@@ -73,9 +79,9 @@ export function BookCard({ book }: BookCardProps) {
             </div>
           )}
 
-          <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent opacity-0 group-hover:opacity-100 group-active:opacity-100 transition-opacity duration-300" />
 
-          <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+          <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 group-active:opacity-100 transition-opacity duration-300">
             <div className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-background/90 backdrop-blur-sm shadow-lg text-foreground text-xs font-medium">
               <BookOpen className="w-3.5 h-3.5" />
               Read
@@ -97,7 +103,7 @@ export function BookCard({ book }: BookCardProps) {
           </div>
         </div>
 
-        <div className="p-3 space-y-1.5">
+        <div className="p-2.5 sm:p-3 space-y-1.5">
           <h3 className="text-sm font-semibold text-card-foreground leading-tight line-clamp-1 group-hover:text-primary transition-colors">
             {book.title}
           </h3>
@@ -124,7 +130,7 @@ export function BookCard({ book }: BookCardProps) {
         </div>
       </div>
 
-      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 group-active:opacity-100 transition-opacity duration-200">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button

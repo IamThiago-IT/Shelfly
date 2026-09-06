@@ -279,7 +279,31 @@ pub fn import_all_data(conn: &Connection, json_data: &str) -> Result<()> {
         for bm_val in bookmarks {
             let bm: Bookmark = serde_json::from_value(bm_val.clone())
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-            add_bookmark(conn, &bm)?;
+            // allow import to be idempotent
+            let _ = conn.execute(
+                "INSERT OR REPLACE INTO bookmarks (id, book_id, page, title, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![bm.id, bm.book_id, bm.page, bm.title, bm.created_at],
+            );
+        }
+    }
+
+    if let Some(sessions) = data["readingSessions"].as_array() {
+        for s_val in sessions {
+            if let Ok(sess) = serde_json::from_value::<ReadingSession>(s_val.clone()) {
+                let _ = conn.execute(
+                    "INSERT OR REPLACE INTO reading_sessions (book_id, current_page, scroll_position, scale, rotation, last_read) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![sess.book_id, sess.current_page, sess.scroll_position, sess.scale, sess.rotation, sess.last_read],
+                );
+            }
+        }
+    } else if let Some(sessions_map) = data["readingSessions"].as_object() {
+        for (_key, s_val) in sessions_map {
+            if let Ok(sess) = serde_json::from_value::<ReadingSession>(s_val.clone()) {
+                let _ = conn.execute(
+                    "INSERT OR REPLACE INTO reading_sessions (book_id, current_page, scroll_position, scale, rotation, last_read) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![sess.book_id, sess.current_page, sess.scroll_position, sess.scale, sess.rotation, sess.last_read],
+                );
+            }
         }
     }
 

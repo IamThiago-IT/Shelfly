@@ -11,56 +11,95 @@ const isTauri = process.env.TAURI_ENV_PLATFORM !== undefined;
 export default defineConfig(async () => ({
   plugins: [
     react(),
-    VitePWA({
-      registerType: "autoUpdate",
-      includeAssets: ["vite.svg", "tauri.svg"],
-      disable: isTauri,
-      manifest: {
-        name: "Shelfly - PDF Reader",
-        short_name: "Shelfly",
-        description: "Leitor de PDF offline",
-        theme_color: "#000000",
-        background_color: "#000000",
-        display: "standalone",
-        scope: "/",
-        start_url: "/",
-        icons: [
-          {
-            src: "vite.svg",
-            sizes: "any",
-            type: "image/svg+xml",
-            purpose: "any maskable",
-          },
-        ],
-      },
-      workbox: {
-        globPatterns: ["**/*.{js,css,html,svg,woff2}"],
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-            handler: "CacheFirst",
-            options: {
-              cacheName: "google-fonts-cache",
-              expiration: {
-                maxEntries: 10,
-                maxAgeSeconds: 60 * 60 * 24 * 365,
-              },
+    ...(isTauri
+      ? []
+      : [
+          VitePWA({
+            registerType: "autoUpdate",
+            includeAssets: ["vite.svg", "tauri.svg"],
+            manifest: {
+              name: "Shelfly - PDF Reader",
+              short_name: "Shelfly",
+              description: "Leitor de PDF offline com progresso e bookmarks",
+              categories: ["productivity", "books"],
+              lang: "pt-BR",
+              theme_color: "#000000",
+              background_color: "#000000",
+              display: "standalone",
+              scope: "/",
+              start_url: "/",
+              orientation: "any",
+              icons: [
+                {
+                  src: "vite.svg",
+                  sizes: "any",
+                  type: "image/svg+xml",
+                  purpose: "any maskable",
+                },
+                {
+                  src: "pwa-192x192.png",
+                  sizes: "192x192",
+                  type: "image/png",
+                  purpose: "any",
+                },
+                {
+                  src: "pwa-512x512.png",
+                  sizes: "512x512",
+                  type: "image/png",
+                  purpose: "any maskable",
+                },
+              ],
+              screenshots: [
+                {
+                  src: "pwa-512x512.png",
+                  sizes: "512x512",
+                  type: "image/png",
+                  form_factor: "wide",
+                  label: "Library view",
+                },
+              ],
             },
-          },
-          {
-            urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
-            handler: "CacheFirst",
-            options: {
-              cacheName: "gstatic-fonts-cache",
-              expiration: {
-                maxEntries: 10,
-                maxAgeSeconds: 60 * 60 * 24 * 365,
-              },
+            workbox: {
+              globPatterns: ["**/*.{js,css,html,svg,png,woff2}"],
+              navigateFallback: "index.html",
+              runtimeCaching: [
+                {
+                  urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
+                  handler: "CacheFirst",
+                  options: {
+                    cacheName: "google-fonts-cache",
+                    expiration: {
+                      maxEntries: 10,
+                      maxAgeSeconds: 60 * 60 * 24 * 365,
+                    },
+                  },
+                },
+                {
+                  urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
+                  handler: "CacheFirst",
+                  options: {
+                    cacheName: "gstatic-fonts-cache",
+                    expiration: {
+                      maxEntries: 10,
+                      maxAgeSeconds: 60 * 60 * 24 * 365,
+                    },
+                  },
+                },
+                {
+                  urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/.*/i,
+                  handler: "CacheFirst",
+                  options: {
+                    cacheName: "jsdelivr-cache",
+                    expiration: {
+                      maxEntries: 20,
+                      maxAgeSeconds: 60 * 60 * 24 * 30,
+                    },
+                  },
+                },
+              ],
             },
-          },
-        ],
-      },
-    }),
+          }),
+        ]),
   ],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

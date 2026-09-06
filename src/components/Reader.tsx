@@ -23,7 +23,8 @@ import {
 } from './ui/dialog'
 import { useOnlineStatus } from '../hooks/useOnlineStatus'
 import { getPDF } from '../lib/pdfStorage'
-import { isTauri } from '../lib/tauri'
+import { isTauri, readFileAsDataUrl } from '../lib/tauri'
+import { loadPDFDocumentFromBuffer } from '../lib/pdf'
 
 export function Reader() {
   const currentBook = useAppStore((s) => s.getCurrentBook())
@@ -59,29 +60,66 @@ export function Reader() {
 
   const bookmarks = currentBookId ? getBookmarksForBook(currentBookId) : []
 
+  // keep track of blob URLs to revoke
+  const blobUrlRef = useRef<string | null>(null)
+
   useEffect(() => {
     if (!currentBook) return
 
+    let cancelled = false
     const loadPDF = async () => {
       setLoading(true)
       setError(null)
+      // cleanup previous blob
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current)
+        blobUrlRef.current = null
+      }
       try {
-        let filePath = currentBook.filePath
+        let doc: pdfjsLib.PDFDocumentProxy
 
-        if (!isTauri() && isOffline) {
+        // Unified loading: if filePath is indexeddb://, load from IndexedDB buffer
+        if (!isTauri() && currentBook.filePath.startsWith('indexeddb://')) {
+          const cached = await getPDF(currentBook.id)
+          if (!cached) {
+            setError('PDF not available offline')
+            setLoading(false)
+            return
+          }
+          doc = await loadPDFDocumentFromBuffer(cached)
+        } else if (!isTauri() && isOffline) {
+          // fallback: filePath may be legacy blob URL, try IndexedDB
           const cachedPDF = await getPDF(currentBook.id)
           if (cachedPDF) {
-            const blob = new Blob([cachedPDF], { type: 'application/pdf' })
-            filePath = URL.createObjectURL(blob)
+            doc = await loadPDFDocumentFromBuffer(cachedPDF)
+          } else if (currentBook.filePath.startsWith('blob:') || currentBook.filePath.startsWith('http')) {
+            const loadingTask = pdfjsLib.getDocument(currentBook.filePath)
+            doc = await loadingTask.promise
           } else {
             setError('PDF not available offline')
             setLoading(false)
             return
           }
+        } else if (isTauri() && !currentBook.filePath.startsWith('blob:')) {
+          // Tauri: filePath is a filesystem path, read via fs API
+          const blobUrl = await readFileAsDataUrl(currentBook.filePath)
+          if (cancelled) {
+            URL.revokeObjectURL(blobUrl)
+            return
+          }
+          blobUrlRef.current = blobUrl
+          const loadingTask = pdfjsLib.getDocument(blobUrl)
+          doc = await loadingTask.promise
+        } else {
+          // blob: or http: direct
+          const loadingTask = pdfjsLib.getDocument(currentBook.filePath)
+          doc = await loadingTask.promise
         }
 
-        const loadingTask = pdfjsLib.getDocument(filePath)
-        const doc = await loadingTask.promise
+        if (cancelled) {
+          doc.destroy()
+          return
+        }
         pdfDocRef.current = doc
         setTotalPages(doc.numPages)
 
@@ -92,25 +130,45 @@ export function Reader() {
         await renderPages(startPage)
       } catch (err) {
         console.error('Failed to load PDF:', err)
-        setError('Failed to load PDF')
+        const msg = err instanceof Error && err.message.includes('Password') ? 'PDF is password protected' : 'Failed to load PDF'
+        setError(msg)
       }
-      setLoading(false)
+      if (!cancelled) setLoading(false)
     }
 
     loadPDF()
     return () => {
+      cancelled = true
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current)
+        blobUrlRef.current = null
+      }
       pdfDocRef.current?.destroy()
       pdfDocRef.current = null
       renderedPagesRef.current.clear()
     }
-  }, [currentBook?.id, isOffline])
+  }, [currentBook?.id, currentBook?.filePath, isOffline])
 
+  // debounce save: only persist when page actually changes, not every 3s blindly
+  const lastSavedPageRef = useRef<number | null>(null)
   useEffect(() => {
-    if (!currentBookId || !currentBook) return
-    const interval = setInterval(() => {
+    if (!currentBookId || !currentBook || totalPages === 0) return
+    if (lastSavedPageRef.current === currentPage) return
+    const timeout = setTimeout(() => {
       updateProgress(currentBookId, currentPage, totalPages)
-    }, 3000)
-    return () => clearInterval(interval)
+      lastSavedPageRef.current = currentPage
+    }, 800)
+    return () => clearTimeout(timeout)
+  }, [currentBookId, currentPage, totalPages, currentBook])
+
+  // also save on unmount / page hide
+  useEffect(() => {
+    if (!currentBookId || totalPages === 0) return
+    return () => {
+      if (lastSavedPageRef.current !== currentPage) {
+        updateProgress(currentBookId, currentPage, totalPages)
+      }
+    }
   }, [currentBookId, currentPage, totalPages])
 
   const renderPages = useCallback(async (startPage: number) => {
@@ -140,7 +198,8 @@ export function Reader() {
     }
 
     const fragment = document.createDocumentFragment()
-    const pagesToRender = Math.min(5, doc.numPages - startPage + 1)
+    // render more pages in continuous mode, but cap to avoid OOM; 5 was too few for large docs
+    const pagesToRender = Math.min(10, doc.numPages - startPage + 1)
 
     for (let i = 0; i < pagesToRender; i++) {
       const pageNum = startPage + i
@@ -272,11 +331,11 @@ export function Reader() {
     <div className="flex-1 flex flex-col h-full bg-background">
       <header
         className={cn(
-          'flex items-center justify-between px-4 h-14 bg-background/80 backdrop-blur-xl border-b border-border/50 transition-opacity duration-300 shrink-0',
+          'flex items-center gap-2 px-2 sm:px-4 h-12 sm:h-14 bg-background/80 backdrop-blur-xl border-b border-border/50 transition-opacity duration-300 shrink-0 overflow-x-auto',
           !controlsVisible && 'opacity-0 pointer-events-none',
         )}
       >
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-1 sm:gap-2 min-w-0 shrink-0">
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost" size="icon" onClick={closeBook}>
@@ -285,13 +344,13 @@ export function Reader() {
             </TooltipTrigger>
             <TooltipContent>Back to library</TooltipContent>
           </Tooltip>
-          <Separator orientation="vertical" className="h-5" />
-          <span className="text-sm font-medium text-foreground truncate max-w-[200px]">
+          <Separator orientation="vertical" className="h-5 hidden sm:block" />
+          <span className="text-sm font-medium text-foreground truncate max-w-[120px] sm:max-w-[200px] hidden sm:block">
             {currentBook.title}
           </span>
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5 sm:gap-1 ml-auto shrink-0">
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -320,7 +379,7 @@ export function Reader() {
             <TooltipContent>Toggle mode (M)</TooltipContent>
           </Tooltip>
 
-          <Separator orientation="vertical" className="h-5 mx-1" />
+          <Separator orientation="vertical" className="h-5 mx-0.5 sm:mx-1" />
 
           <Tooltip>
             <TooltipTrigger asChild>
@@ -335,7 +394,7 @@ export function Reader() {
             <TooltipContent>Zoom out</TooltipContent>
           </Tooltip>
 
-          <span className="text-xs font-medium text-muted-foreground min-w-[3rem] text-center tabular-nums">
+          <span className="text-xs font-medium text-muted-foreground min-w-[2.5rem] sm:min-w-[3rem] text-center tabular-nums">
             {Math.round(scale * 100)}%
           </span>
 
@@ -352,7 +411,7 @@ export function Reader() {
             <TooltipContent>Zoom in</TooltipContent>
           </Tooltip>
 
-          <Separator orientation="vertical" className="h-5 mx-1" />
+          <Separator orientation="vertical" className="h-5 mx-0.5 sm:mx-1 hidden sm:block" />
 
           <Tooltip>
             <TooltipTrigger asChild>
@@ -360,6 +419,7 @@ export function Reader() {
                 variant="ghost"
                 size="icon"
                 onClick={() => setRotation((r) => (r + 90) % 360)}
+                className="hidden sm:inline-flex"
               >
                 <RotateCw className="h-4 w-4" />
               </Button>
@@ -367,11 +427,11 @@ export function Reader() {
             <TooltipContent>Rotate</TooltipContent>
           </Tooltip>
 
-          <Separator orientation="vertical" className="h-5 mx-1" />
+          <Separator orientation="vertical" className="h-5 mx-0.5 sm:mx-1 hidden sm:block" />
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={cycleTheme}>
+              <Button variant="ghost" size="icon" onClick={cycleTheme} className="hidden sm:inline-flex">
                 {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
               </Button>
             </TooltipTrigger>
@@ -380,7 +440,7 @@ export function Reader() {
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={toggleFullscreen}>
+              <Button variant="ghost" size="icon" onClick={toggleFullscreen} className="hidden sm:inline-flex">
                 {isFullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
               </Button>
             </TooltipTrigger>
@@ -396,7 +456,7 @@ export function Reader() {
             readerMode === 'single' && 'flex items-start justify-center py-8',
             readerMode === 'continuous' && 'py-8',
           )}
-          style={{ filter: `brightness(${brightness}%)` }}
+          style={{ filter: `brightness(${brightness}%)` } as React.CSSProperties}
         >
           {loading ? (
             <div className="flex items-center justify-center py-20">
@@ -406,27 +466,38 @@ export function Reader() {
               </div>
             </div>
           ) : (
-            <div ref={canvasContainerRef} className="px-4 max-w-4xl mx-auto" />
+            <div ref={canvasContainerRef} className="px-2 sm:px-4 max-w-4xl mx-auto" />
           )}
         </div>
 
         {showSidebar && (
-          <aside className="w-72 border-l border-border bg-card/50 backdrop-blur-sm animate-in slide-in-from-right duration-300 shrink-0 overflow-y-auto">
-            <Bookmarks />
-          </aside>
+          <>
+            <div
+              className="fixed inset-0 z-40 bg-black/10 backdrop-blur-sm md:hidden"
+              onClick={() => setShowSidebar(false)}
+            />
+            <aside className={cn(
+              'fixed md:relative inset-y-0 right-0 z-50 w-80 md:w-72',
+              'border-l border-border bg-card md:bg-card/50 md:backdrop-blur-sm',
+              'animate-in slide-in-from-right duration-300 shrink-0 overflow-y-auto',
+              'shadow-2xl md:shadow-none',
+            )}>
+              <Bookmarks />
+            </aside>
+          </>
         )}
       </div>
 
       <footer
         className={cn(
-          'flex items-center justify-between px-4 h-12 bg-background/80 backdrop-blur-xl border-t border-border/50 transition-opacity duration-300 shrink-0',
+          'flex items-center justify-between px-2 sm:px-4 h-10 sm:h-12 bg-background/80 backdrop-blur-xl border-t border-border/50 transition-opacity duration-300 shrink-0',
           !controlsVisible && 'opacity-0 pointer-events-none',
         )}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 sm:gap-2">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={prevPage} disabled={currentPage <= 1}>
+              <Button variant="ghost" size="icon" onClick={prevPage} disabled={currentPage <= 1} className="h-8 w-8 sm:h-9 sm:w-9">
                 <ChevronLeft className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
@@ -436,16 +507,16 @@ export function Reader() {
           <Button
             variant="ghost"
             size="sm"
-            className="text-sm font-medium gap-1"
+            className="text-xs sm:text-sm font-medium gap-1 h-8 sm:h-9"
             onClick={() => { setShowPageDialog(true); setPageInput('') }}
           >
             <span className="tabular-nums">{currentPage}</span>
-            <span className="text-muted-foreground">/ {totalPages}</span>
+            <span className="text-muted-foreground hidden sm:inline">/ {totalPages}</span>
           </Button>
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={nextPage} disabled={currentPage >= totalPages}>
+              <Button variant="ghost" size="icon" onClick={nextPage} disabled={currentPage >= totalPages} className="h-8 w-8 sm:h-9 sm:w-9">
                 <ChevronRight className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
@@ -453,29 +524,29 @@ export function Reader() {
           </Tooltip>
         </div>
 
-        <div className="flex items-center gap-3 flex-1 max-w-xs mx-4">
+        <div className="flex items-center gap-2 sm:gap-3 flex-1 max-w-[120px] sm:max-w-xs mx-2 sm:mx-4">
           <div className="flex-1 h-1 rounded-full bg-muted overflow-hidden">
             <div
               className="h-full rounded-full bg-primary transition-all duration-300"
               style={{ width: `${progressPercent}%` }}
             />
           </div>
-          <span className="text-xs font-medium text-muted-foreground tabular-nums min-w-[3rem] text-right">
+          <span className="text-[10px] sm:text-xs font-medium text-muted-foreground tabular-nums min-w-[2rem] sm:min-w-[3rem] text-right">
             {progressPercent}%
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 sm:gap-2">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={handleAddBookmark}>
+              <Button variant="ghost" size="icon" onClick={handleAddBookmark} className="h-8 w-8 sm:h-9 sm:w-9">
                 <Bookmark className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
             <TooltipContent>Add bookmark</TooltipContent>
           </Tooltip>
           {bookmarks.length > 0 && (
-            <span className="text-xs text-muted-foreground tabular-nums">{bookmarks.length}</span>
+            <span className="text-[10px] sm:text-xs text-muted-foreground tabular-nums">{bookmarks.length}</span>
           )}
         </div>
       </footer>

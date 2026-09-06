@@ -1,6 +1,9 @@
-import { Library, BookOpen, History, Bookmark, Settings, ChevronLeft, Search } from 'lucide-react'
+import { Library, BookOpen, History, Bookmark, Settings, ChevronLeft, Search, HardDrive } from 'lucide-react'
+import { useState, useEffect } from 'react'
 import { useAppStore } from '../store/appStore'
+import type { View } from '../types'
 import { cn } from '../lib/utils'
+import { getStorageEstimate } from '../lib/pdfStorage'
 import { Button } from './ui/button'
 import { ScrollArea } from './ui/scroll-area'
 import { Separator } from './ui/separator'
@@ -23,6 +26,12 @@ export function Sidebar() {
   const bookmarks = useAppStore((s) => s.bookmarks)
 
   const recentCount = getRecentBooks().length
+  const [storageInfo, setStorageInfo] = useState<{ usage: number; quota: number } | null>(null)
+  useEffect(() => {
+    getStorageEstimate().then(setStorageInfo).catch(() => {})
+  }, [books.length])
+
+  const storagePercent = storageInfo && storageInfo.quota > 0 ? Math.round((storageInfo.usage / storageInfo.quota) * 100) : 0
 
   return (
     <>
@@ -79,7 +88,14 @@ export function Sidebar() {
                     <Button
                       variant={currentView === item.id ? 'secondary' : 'ghost'}
                       size="sm"
-                      onClick={() => setCurrentView(item.id as 'library')}
+                      onClick={() => {
+                        if (item.id === 'recent' || item.id === 'bookmarks') {
+                          setCurrentView(item.id as View)
+                          // also focus library view with specific filter handled in Layout
+                        } else {
+                          setCurrentView(item.id as View)
+                        }
+                      }}
                       className={cn(
                         'w-full justify-start gap-3 h-10 px-3',
                         !sidebarOpen && 'lg:justify-center lg:px-0 lg:w-10 lg:h-10',
@@ -148,7 +164,21 @@ export function Sidebar() {
           </div>
         </ScrollArea>
 
-        <div className="p-2 border-t border-sidebar-border shrink-0">
+        <div className="p-2 border-t border-sidebar-border shrink-0 space-y-2">
+          {storageInfo && sidebarOpen && (
+            <div className="px-3 py-2 rounded-md bg-sidebar-muted/50">
+              <div className="flex items-center gap-2 text-[11px] font-medium text-sidebar-muted-foreground">
+                <HardDrive className="w-3.5 h-3.5" />
+                Storage {storagePercent}%
+              </div>
+              <div className="mt-1.5 h-1.5 rounded-full bg-sidebar-border overflow-hidden">
+                <div className="h-full bg-primary transition-all" style={{ width: `${Math.min(storagePercent, 100)}%` }} />
+              </div>
+              <p className="text-[10px] text-sidebar-muted-foreground mt-1">
+                {(storageInfo.usage / 1024 / 1024).toFixed(1)} MB / {(storageInfo.quota / 1024 / 1024 / 1024).toFixed(1)} GB
+              </p>
+            </div>
+          )}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

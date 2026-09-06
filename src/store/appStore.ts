@@ -106,14 +106,27 @@ export const useAppStore = create<AppState>()(
           books: [...s.books, ...newBooks.filter((b) => !s.books.find((existing) => existing.id === b.id))],
         })),
 
-      removeBook: (id) =>
+      removeBook: (id) => {
+        // also clean offline storage (fire & forget) and revoke blob URLs
+        if (!isTauri()) {
+          deletePDF(id).catch(() => {})
+          deleteMetadata(id).catch(() => {})
+        } else {
+          // Tauri: could delete file from app_data_dir/books if needed
+        }
+        // revoke any tracked object URLs
+        try {
+          const book = get().books.find((b) => b.id === id)
+          if (book?.filePath.startsWith('blob:')) URL.revokeObjectURL(book.filePath)
+        } catch {}
         set((s) => ({
           books: s.books.filter((b) => b.id !== id),
           bookmarks: s.bookmarks.filter((bm) => bm.bookId !== id),
           readingSessions: Object.fromEntries(
             Object.entries(s.readingSessions).filter(([key]) => key !== id),
           ),
-        })),
+        }))
+      },
 
       updateProgress: (bookId, page, totalPages) =>
         set((s) => {
@@ -200,19 +213,36 @@ export const useAppStore = create<AppState>()(
 
       exportData: () => {
         const { books, bookmarks, readingSessions } = get()
-        return JSON.stringify({ books, bookmarks, readingSessions })
+        return JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), books, bookmarks, readingSessions }, null, 2)
       },
 
       importData: (json) => {
         try {
           const data = JSON.parse(json)
+          // support both formats: readingSessions as Record or Array (from Rust export)
+          let sessions: Record<string, ReadingSession> = {}
+          if (Array.isArray(data.readingSessions)) {
+            for (const s of data.readingSessions as ReadingSession[]) {
+              if (s?.bookId) sessions[s.bookId] = s
+            }
+          } else if (data.readingSessions && typeof data.readingSessions === 'object') {
+            sessions = data.readingSessions as Record<string, ReadingSession>
+          }
+
+          // basic validation
+          const books = Array.isArray(data.books) ? (data.books as Book[]).filter((b) => b?.id && b?.title) : []
+          const bookmarks = Array.isArray(data.bookmarks)
+            ? (data.bookmarks as Bookmark[]).filter((b) => b?.id && b?.bookId)
+            : []
+
           set({
-            books: data.books || [],
-            bookmarks: data.bookmarks || [],
-            readingSessions: data.readingSessions || {},
+            books,
+            bookmarks,
+            readingSessions: sessions,
           })
-        } catch {
-          console.error('Failed to import data')
+        } catch (e) {
+          console.error('Failed to import data', e)
+          throw new Error('Invalid backup file')
         }
       },
 
@@ -308,6 +338,12 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'shelfly-storage',
+      version: 1,
+      migrate: (persistedState, version) => {
+        // future migrations go here
+        if (version === 0) return persistedState as AppState
+        return persistedState as AppState
+      },
       partialize: (state) => ({
         books: state.books,
         bookmarks: state.bookmarks,

@@ -2,6 +2,8 @@ import { TooltipProvider } from './ui/tooltip'
 import { Sidebar } from './Sidebar'
 import { Library } from './Library'
 import { Reader } from './Reader'
+import { RecentView } from './RecentView'
+import { BookmarksView } from './BookmarksView'
 import { useAppStore } from '../store/appStore'
 import { useOnlineStatus } from '../hooks/useOnlineStatus'
 import { WifiOff } from 'lucide-react'
@@ -10,6 +12,13 @@ export function Layout() {
   const currentView = useAppStore((s) => s.currentView)
   const currentBookId = useAppStore((s) => s.currentBookId)
   const { isOffline } = useOnlineStatus()
+
+  const renderMain = () => {
+    if (currentView === 'reader' && currentBookId) return <Reader />
+    if (currentView === 'recent') return <RecentView />
+    if (currentView === 'bookmarks') return <BookmarksView />
+    return <Library />
+  }
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -22,7 +31,7 @@ export function Layout() {
               <span className="text-xs font-medium">Offline</span>
             </div>
           )}
-          {currentView === 'reader' && currentBookId ? <Reader /> : <Library />}
+          {renderMain()}
         </main>
       </div>
     </TooltipProvider>

@@ -6,6 +6,7 @@ import { generateId } from '../lib/utils'
 import { getPDFMeta, generateThumbnail } from '../lib/pdf'
 import { isTauri, pickPDFFiles, copyFileToAppDir } from '../lib/tauri'
 import { savePDF, saveMetadata } from '../lib/pdfStorage'
+import { readFileAsDataUrl } from '../lib/tauri'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import {
@@ -25,14 +26,42 @@ export function Library() {
   const setSearchQuery = useAppStore((s) => s.setSearchQuery)
   const sortBy = useAppStore((s) => s.sortBy)
   const setSortBy = useAppStore((s) => s.setSortBy)
-  const getFilteredBooks = useAppStore((s) => s.getFilteredBooks)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const [importing, setImporting] = useState(false)
   const [commandOpen, setCommandOpen] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+  const [searchInput, setSearchInput] = useState(searchQuery)
 
-  const filteredBooks = getFilteredBooks()
+  // debounce search input -> store
+  useEffect(() => {
+    const t = setTimeout(() => setSearchQuery(searchInput), 250)
+    return () => clearTimeout(t)
+  }, [searchInput, setSearchQuery])
+  useEffect(() => setSearchInput(searchQuery), [searchQuery])
+
+  const filteredBooks = (() => {
+    let filtered = books
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase()
+      filtered = filtered.filter((b) => b.title.toLowerCase().includes(q) || b.author.toLowerCase().includes(q))
+    }
+    switch (sortBy) {
+      case 'lastRead':
+        return [...filtered].sort((a, b) => {
+          if (!a.lastRead) return 1
+          if (!b.lastRead) return -1
+          return new Date(b.lastRead).getTime() - new Date(a.lastRead).getTime()
+        })
+      case 'title':
+        return [...filtered].sort((a, b) => a.title.localeCompare(b.title))
+      case 'progress':
+        return [...filtered].sort((a, b) => b.progress - a.progress)
+      default:
+        return filtered
+    }
+  })()
 
   useEffect(() => {
     const handler = () => setCommandOpen(true)
@@ -58,12 +87,13 @@ export function Library() {
 
     for (const file of Array.from(files)) {
       if (!file.name.toLowerCase().endsWith('.pdf')) continue
-      const filePath = URL.createObjectURL(file)
+      const blobUrl = URL.createObjectURL(file)
       try {
-        const meta = await getPDFMeta(filePath)
-        const thumbnail = await generateThumbnail(filePath, 150)
+        const meta = await getPDFMeta(blobUrl)
+        const thumbnail = await generateThumbnail(blobUrl, 150)
         const bookId = generateId()
 
+        let persistedPath: string
         if (!isTauri()) {
           const arrayBuffer = await file.arrayBuffer()
           await savePDF(bookId, arrayBuffer)
@@ -75,13 +105,17 @@ export function Library() {
             coverThumbnail: thumbnail || undefined,
             savedAt: new Date().toISOString(),
           })
+          // persist as indexedDB key, not blob URL - stable across reloads
+          persistedPath = `indexeddb://${bookId}`
+        } else {
+          persistedPath = blobUrl
         }
 
         newBooks.push({
           id: bookId,
           title: meta.title,
           author: meta.author,
-          filePath,
+          filePath: persistedPath,
           totalPages: meta.totalPages,
           currentPage: 0,
           progress: 0,
@@ -91,11 +125,26 @@ export function Library() {
         })
       } catch (err) {
         console.error(`Failed to load PDF: ${file.name}`, err)
+      } finally {
+        URL.revokeObjectURL(blobUrl)
       }
     }
 
     if (newBooks.length > 0) addBooks(newBooks)
+    // reset input so same file can be re-selected
+    if (fileInputRef.current) fileInputRef.current.value = ''
     setImporting(false)
+  }
+
+  async function handleDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setDragOver(false)
+    const files = e.dataTransfer.files
+    if (files && files.length > 0) {
+      // convert FileList from DataTransfer to handle via handleFileSelect
+      const dtFiles = files as unknown as FileList
+      await handleFileSelect(dtFiles)
+    }
   }
 
   async function handleTauriImport() {
@@ -108,8 +157,16 @@ export function Library() {
       const paths = await pickPDFFiles()
       for (const sourcePath of paths) {
         const destPath = await copyFileToAppDir(sourcePath)
-        const meta = await getPDFMeta(destPath)
-        const thumbnail = await generateThumbnail(destPath, 150)
+        // read as blob URL for pdf.js in Tauri (uses file path via fs)
+        const blobUrl = await readFileAsDataUrl(destPath)
+        let meta
+        let thumbnail
+        try {
+          meta = await getPDFMeta(blobUrl)
+          thumbnail = await generateThumbnail(blobUrl, 150)
+        } finally {
+          // keep tracked URL for cleanup, will be revoked on next load via trackObjectUrl
+        }
         addBooks([{
           id: generateId(),
           title: meta.title,
@@ -131,16 +188,33 @@ export function Library() {
 
   return (
     <>
-      <div className="flex-1 flex flex-col h-full">
-        <header className="px-6 pt-6 pb-4 border-b border-border shrink-0">
-          <div className="flex items-center justify-between mb-4">
+      <div
+        className="flex-1 flex flex-col h-full"
+        onDragOver={(e) => {
+          e.preventDefault()
+          setDragOver(true)
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={handleDrop}
+      >
+        {dragOver && (
+          <div className="absolute inset-0 z-30 bg-primary/5 backdrop-blur-sm border-2 border-dashed border-primary/30 flex items-center justify-center pointer-events-none">
+            <div className="bg-card border border-border rounded-xl p-6 shadow-lg text-center">
+              <Upload className="w-8 h-8 mx-auto text-primary mb-2" />
+              <p className="text-sm font-medium">Drop PDFs here</p>
+              <p className="text-xs text-muted-foreground">Release to import</p>
+            </div>
+          </div>
+        )}
+        <header className="px-4 sm:px-6 pt-4 sm:pt-6 pb-4 border-b border-border shrink-0">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
             <div>
-              <h1 className="text-2xl font-bold text-foreground tracking-tight">Library</h1>
-              <p className="text-sm text-muted-foreground mt-0.5">
+              <h1 className="text-xl sm:text-2xl font-bold text-foreground tracking-tight">Library</h1>
+              <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">
                 {books.length} {books.length === 1 ? 'book' : 'books'} in your collection
               </p>
             </div>
-            <Button onClick={handleTauriImport} disabled={importing} className="gap-2">
+            <Button onClick={handleTauriImport} disabled={importing} className="gap-2 w-full sm:w-auto">
               <Upload className="w-4 h-4" />
               {importing ? 'Importing...' : 'Import PDF'}
             </Button>
@@ -154,14 +228,14 @@ export function Library() {
             />
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="relative flex-1 max-w-sm">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+            <div className="relative flex-1 max-w-full sm:max-w-sm">
               <Input
                 ref={searchRef}
                 type="text"
                 placeholder="Search by title or author..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
                 className="pl-9 h-9"
               />
               <svg
@@ -179,8 +253,8 @@ export function Library() {
               </svg>
             </div>
             <Select value={sortBy} onValueChange={(v) => setSortBy(v as 'lastRead' | 'title' | 'progress')}>
-              <SelectTrigger className="w-[140px] h-9">
-                <ArrowUpDown className="w-3.5 h-3.5 mr-2 text-muted-foreground" />
+              <SelectTrigger className="w-full sm:w-[140px] h-9">
+                <ArrowUpDown className="w-3.5 h-3.5 mr-2 text-muted-foreground shrink-0" />
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -192,15 +266,15 @@ export function Library() {
           </div>
         </header>
 
-        <ScrollArea className="flex-1 px-6 py-6">
+        <ScrollArea className="flex-1 px-4 sm:px-6 py-4 sm:py-6">
           {filteredBooks.length > 0 ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4">
               {filteredBooks.map((book) => (
                 <BookCard key={book.id} book={book} />
               ))}
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center h-full text-center py-20">
+            <div className="flex flex-col items-center justify-center h-full text-center py-12 sm:py-20">
               <div className="w-16 h-16 rounded-2xl bg-muted flex items-center justify-center mb-4 ring-1 ring-border">
                 <LibraryIcon className="w-8 h-8 text-muted-foreground" />
               </div>

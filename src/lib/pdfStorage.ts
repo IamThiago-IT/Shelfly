@@ -67,10 +67,32 @@ export async function hasPDF(id: string): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const tx = database.transaction(PDF_STORE, "readonly");
     const store = tx.objectStore(PDF_STORE);
-    const request = store.count(id);
-    request.onsuccess = () => resolve(request.result > 0);
+    const request = store.getKey(IDBKeyRange.only(id));
+    request.onsuccess = () => resolve(request.result !== undefined);
     request.onerror = () => reject(request.error);
   });
+}
+
+export async function getStorageEstimate(): Promise<{ usage: number; quota: number } | null> {
+  if (navigator.storage?.estimate) {
+    const est = await navigator.storage.estimate()
+    return { usage: est.usage ?? 0, quota: est.quota ?? 0 }
+  }
+  return null
+}
+
+export async function getTotalOfflineSize(): Promise<number> {
+  const database = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = database.transaction(PDF_STORE, "readonly")
+    const store = tx.objectStore(PDF_STORE)
+    const request = store.getAll()
+    request.onsuccess = () => {
+      const total = (request.result as ArrayBuffer[]).reduce((acc, buf) => acc + (buf?.byteLength ?? 0), 0)
+      resolve(total)
+    }
+    request.onerror = () => reject(request.error)
+  })
 }
 
 export interface PDFMetadata {
