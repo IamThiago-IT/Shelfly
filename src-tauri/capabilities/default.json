@@ -21,8 +21,8 @@
     {
       "identifier": "fs:scope",
       "allow": [
-        { "path": "$APPDATA/**" },
-        { "path": "$RESOURCE/**" }
+        { "path": "$APPDATA/books/**" },
+        { "path": "$APPDATA/shelfly.db*" }
       ]
     }
   ]

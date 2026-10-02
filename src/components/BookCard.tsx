@@ -4,6 +4,8 @@ import type { Book } from '../types'
 import { formatDate } from '../lib/utils'
 import { useAppStore } from '../store/appStore'
 import { isTauri } from '../lib/tauri'
+import { logger } from '../lib/logger'
+import { toast } from '../lib/toast'
 import { Card } from './ui/card'
 import { Button } from './ui/button'
 import { Badge } from './ui/badge'
@@ -14,6 +16,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog'
 
 interface BookCardProps {
   book: Book
@@ -29,6 +39,8 @@ export function BookCard({ book }: BookCardProps) {
   const [imgError, setImgError] = useState(false)
   const [isOffline, setIsOffline] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [removing, setRemoving] = useState(false)
 
   useEffect(() => {
     if (!isTauri()) {
@@ -48,19 +60,47 @@ export function BookCard({ book }: BookCardProps) {
       if (isOffline) {
         await removeBookOffline(book.id)
         setIsOffline(false)
+        toast.success('Offline copy removed', book.title)
       } else {
         await saveBookOffline(book.id)
         setIsOffline(true)
+        toast.success('Saved for offline reading', book.title)
       }
     } catch (error) {
-      console.error('Failed to toggle offline:', error)
+      logger.error('Failed to toggle offline', error)
+      const msg = error instanceof Error ? error.message : 'Failed to update offline copy'
+      toast.error('Failed to update offline copy', msg)
     }
     setSaving(false)
   }
 
+  async function handleConfirmRemove() {
+    setRemoving(true)
+    try {
+      removeBook(book.id)
+      toast.success('Book removed', book.title)
+      setConfirmOpen(false)
+    } catch (error) {
+      logger.error('Failed to remove book', error)
+      toast.error('Failed to remove book', book.title)
+    }
+    setRemoving(false)
+  }
+
   return (
-    <Card className="group overflow-hidden transition-all duration-300 hover:shadow-lg hover:shadow-primary/5 hover:-translate-y-0.5 cursor-pointer border-border/50">
-      <div onClick={() => openBook(book.id)}>
+    <Card className="group overflow-hidden transition-all duration-300 hover:shadow-lg hover:shadow-primary/5 hover:-translate-y-0.5 cursor-pointer border-border/50 focus-within:shadow-lg">
+      <div
+        onClick={() => openBook(book.id)}
+        role="button"
+        tabIndex={0}
+        aria-label={`Open book ${book.title}`}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            openBook(book.id)
+          }
+        }}
+      >
         <div className="relative aspect-[3/4] overflow-hidden bg-gradient-to-br from-muted/50 to-muted">
           {book.coverThumbnail && !imgError ? (
             <img
@@ -130,12 +170,13 @@ export function BookCard({ book }: BookCardProps) {
         </div>
       </div>
 
-      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 group-active:opacity-100 transition-opacity duration-200">
+      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 group-active:opacity-100 focus-within:opacity-100 focus-visible:opacity-100 transition-opacity duration-200">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               variant="secondary"
               size="icon"
+              aria-label={`More options for ${book.title}`}
               className="h-7 w-7 bg-background/80 backdrop-blur-sm hover:bg-background"
               onClick={(e) => e.stopPropagation()}
             >
@@ -179,7 +220,7 @@ export function BookCard({ book }: BookCardProps) {
               className="text-destructive focus:text-destructive"
               onClick={(e) => {
                 e.stopPropagation()
-                removeBook(book.id)
+                setConfirmOpen(true)
               }}
             >
               <Trash2 className="w-4 h-4 mr-2" />
@@ -188,6 +229,26 @@ export function BookCard({ book }: BookCardProps) {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent aria-describedby="remove-book-desc">
+          <DialogHeader>
+            <DialogTitle>Remove “{book.title}”?</DialogTitle>
+            <DialogDescription id="remove-book-desc">
+              This will remove the book from your library and delete its offline copy.
+              This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setConfirmOpen(false)} disabled={removing}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleConfirmRemove} disabled={removing}>
+              {removing ? 'Removing…' : 'Remove'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   )
 }

@@ -23,7 +23,7 @@ import {
 } from './ui/dialog'
 import { useOnlineStatus } from '../hooks/useOnlineStatus'
 import { getPDF } from '../lib/pdfStorage'
-import { isTauri, readFileAsDataUrl } from '../lib/tauri'
+import { isTauri, readFileAsDataUrl, revokeAllObjectUrls } from '../lib/tauri'
 import { loadPDFDocumentFromBuffer } from '../lib/pdf'
 
 export function Reader() {
@@ -170,6 +170,13 @@ export function Reader() {
       }
     }
   }, [currentBookId, currentPage, totalPages])
+
+  // Ensure all tracked object URLs are revoked when leaving the page/app
+  useEffect(() => {
+    const onBeforeUnload = () => revokeAllObjectUrls()
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [])
 
   const renderPages = useCallback(async (startPage: number) => {
     const doc = pdfDocRef.current

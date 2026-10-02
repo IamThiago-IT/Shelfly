@@ -2,9 +2,10 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
-// @ts-expect-error process is a nodejs global
+// Node globals available in vite.config (no @ts-expect-error, see issue #6/#16).
+declare const process: { env: Record<string, string | undefined> };
+
 const host = process.env.TAURI_DEV_HOST;
-// @ts-expect-error process is a nodejs global
 const isTauri = process.env.TAURI_ENV_PLATFORM !== undefined;
 
 // https://vite.dev/config/
@@ -16,26 +17,20 @@ export default defineConfig(async () => ({
       : [
           VitePWA({
             registerType: "autoUpdate",
-            includeAssets: ["vite.svg", "tauri.svg"],
+            includeAssets: ["pwa-192x192.png", "pwa-512x512.png"],
             manifest: {
               name: "Shelfly - PDF Reader",
               short_name: "Shelfly",
               description: "Leitor de PDF offline com progresso e bookmarks",
               categories: ["productivity", "books"],
               lang: "pt-BR",
-              theme_color: "#000000",
-              background_color: "#000000",
+              theme_color: "#ffffff",
+              background_color: "#f8fafc",
               display: "standalone",
               scope: "/",
               start_url: "/",
               orientation: "any",
               icons: [
-                {
-                  src: "vite.svg",
-                  sizes: "any",
-                  type: "image/svg+xml",
-                  purpose: "any maskable",
-                },
                 {
                   src: "pwa-192x192.png",
                   sizes: "192x192",
@@ -46,7 +41,14 @@ export default defineConfig(async () => ({
                   src: "pwa-512x512.png",
                   sizes: "512x512",
                   type: "image/png",
-                  purpose: "any maskable",
+                  purpose: "maskable",
+                },
+              ],
+              shortcuts: [
+                {
+                  name: "Open Library",
+                  url: "/",
+                  description: "Open your book library",
                 },
               ],
               screenshots: [
@@ -60,7 +62,7 @@ export default defineConfig(async () => ({
               ],
             },
             workbox: {
-              globPatterns: ["**/*.{js,css,html,svg,png,woff2}"],
+              globPatterns: ["**/*.{js,css,html,svg,png,webp,woff2}"],
               navigateFallback: "index.html",
               runtimeCaching: [
                 {

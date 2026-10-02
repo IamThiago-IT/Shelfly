@@ -14,8 +14,22 @@ where
     F: FnOnce(&Connection) -> rusqlite::Result<T>,
 {
     let state = app.state::<AppState>();
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    f(&db).map_err(|e| e.to_string())
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| "database busy, try again".to_string())?;
+    f(&db).map_err(|e| {
+        // Avoid leaking internal paths in IPC errors (issue #2).
+        // Log full error server-side, return sanitized message.
+        eprintln!("db error: {}", e);
+        match e {
+            rusqlite::Error::QueryReturnedNoRows => "not found".to_string(),
+            rusqlite::Error::ToSqlConversionFailure(_) => "invalid data".to_string(),
+            rusqlite::Error::FromSqlConversionFailure(_, _, _) => "invalid data".to_string(),
+            rusqlite::Error::InvalidParameterName(_) => "invalid data".to_string(),
+            _ => "database operation failed".to_string(),
+        }
+    })
 }
 
 #[tauri::command]

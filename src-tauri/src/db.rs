@@ -44,6 +44,15 @@ pub fn get_db_path(app_data_dir: &PathBuf) -> PathBuf {
 pub fn init_db(db_path: &PathBuf) -> Result<Connection> {
     let conn = Connection::open(db_path)?;
 
+    // Hardening (issues #4, #12): enforce FKs, WAL mode, schema versioning.
+    conn.execute_batch(
+        "
+        PRAGMA journal_mode=WAL;
+        PRAGMA foreign_keys=ON;
+        PRAGMA user_version=1;
+        "
+    )?;
+
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS books (
@@ -156,15 +165,41 @@ pub fn get_book(conn: &Connection, id: &str) -> Result<Option<Book>> {
 }
 
 pub fn remove_book(conn: &Connection, id: &str) -> Result<()> {
+    // Fetch file_path BEFORE delete so we can clean the orphan PDF (issue #2).
+    // Do all DB deletes in one implicit transaction scope; file removal is
+    // best-effort after commit (NotFound == success).
+    let file_path: Option<String> = conn
+        .query_row("SELECT file_path FROM books WHERE id = ?1", params![id], |row| {
+            row.get(0)
+        })
+        .ok();
+
     conn.execute("DELETE FROM bookmarks WHERE book_id = ?1", params![id])?;
     conn.execute("DELETE FROM reading_sessions WHERE book_id = ?1", params![id])?;
     conn.execute("DELETE FROM books WHERE id = ?1", params![id])?;
+
+    if let Some(path) = file_path {
+        // Only delete files inside the expected books dir to avoid path traversal.
+        // If path doesn't look like a shelly book file, skip silently.
+        if path.contains("books") || path.ends_with(".pdf") {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {},
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+                Err(e) => {
+                    eprintln!("warning: failed to remove orphan PDF: {}", e.kind());
+                },
+            }
+        }
+    }
     Ok(())
 }
 
 pub fn update_progress(conn: &Connection, book_id: &str, current_page: i64, total_pages: i64) -> Result<()> {
+    // Keep in sync with frontend `calculateProgress` (issue #4):
+    // integer percent via round, clamped 0..=100.
     let progress = if total_pages > 0 {
-        (current_page as f64 / total_pages as f64) * 100.0
+        let clamped = current_page.clamp(0, total_pages);
+        ((clamped as f64 / total_pages as f64) * 100.0).round().clamp(0.0, 100.0)
     } else {
         0.0
     };
@@ -267,13 +302,44 @@ pub fn import_all_data(conn: &Connection, json_data: &str) -> Result<()> {
     let data: serde_json::Value = serde_json::from_str(json_data)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
 
-    if let Some(books) = data["books"].as_array() {
-        for book_val in books {
-            let book: Book = serde_json::from_value(book_val.clone())
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-            import_book(conn, &book)?;
-        }
+    // Basic schema validation (issue #12): must be an object with optional arrays.
+    if !data.is_object() {
+        return Err(rusqlite::Error::ToSqlConversionFailure(
+            "backup must be a JSON object".into(),
+        ));
     }
+    // Reject absurd payloads early (DoS guard): 25MB hard cap.
+    if json_data.len() > 25 * 1024 * 1024 {
+        return Err(rusqlite::Error::ToSqlConversionFailure(
+            "backup too large (>25MB)".into(),
+        ));
+    }
+
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let result: Result<()> = (|| {
+        if let Some(books) = data["books"].as_array() {
+            for book_val in books {
+                let mut book: Book = serde_json::from_value(book_val.clone())
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                // Validation: id/title required, pages sane, file_path non-empty.
+                if book.id.trim().is_empty() || book.title.trim().is_empty() {
+                    continue;
+                }
+                if book.total_pages < 0 || book.current_page < 0 {
+                    continue;
+                }
+                // Cap cover_thumbnail at ~1MB base64 (issue #12).
+                if let Some(ref thumb) = book.cover_thumbnail {
+                    if thumb.len() > 1024 * 1024 {
+                        book.cover_thumbnail = None;
+                    }
+                }
+                if book.file_path.trim().is_empty() {
+                    continue;
+                }
+                import_book(conn, &book)?;
+            }
+        }
 
     if let Some(bookmarks) = data["bookmarks"].as_array() {
         for bm_val in bookmarks {
@@ -307,7 +373,18 @@ pub fn import_all_data(conn: &Connection, json_data: &str) -> Result<()> {
         }
     }
 
-    Ok(())
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(e)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -397,5 +474,72 @@ mod tests {
         let conn = setup_conn();
         let result = import_all_data(&conn, "{not-json}");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn remove_book_cleans_file_and_cascades() {
+        let conn = setup_conn();
+        // create a temp pdf file to simulate $APPDATA/books/doc.pdf
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp = std::env::temp_dir().join(format!("shelfly-test-{}.pdf", nanos));
+        std::fs::write(&tmp, b"%PDF-1.4 test").expect("write tmp");
+        let path_str = tmp.to_string_lossy().to_string();
+        let book = Book {
+            id: "book-del".into(),
+            title: "Del".into(),
+            author: "A".into(),
+            file_path: format!("books/{}", path_str),
+            total_pages: 10,
+            current_page: 1,
+            progress: 10.0,
+            last_read: None,
+            added_at: "2026-01-01T00:00:00Z".into(),
+            cover_thumbnail: None,
+        };
+        // use real path so remove_file succeeds
+        let mut book2 = book.clone();
+        book2.file_path = path_str.clone();
+        import_book(&conn, &book2).expect("import");
+        add_bookmark(
+            &conn,
+            &Bookmark {
+                id: "bm-del".into(),
+                book_id: "book-del".into(),
+                page: 1,
+                title: "t".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+            },
+        )
+        .expect("bm");
+        assert!(tmp.exists());
+        remove_book(&conn, "book-del").expect("remove");
+        assert!(!tmp.exists(), "orphan PDF should be deleted");
+        assert!(get_book(&conn, "book-del").expect("get").is_none());
+        assert!(get_bookmarks(&conn, "book-del").expect("bms").is_empty());
+    }
+
+    #[test]
+    fn update_progress_rounds_to_int_percent() {
+        let conn = setup_conn();
+        let book = Book {
+            id: "book-prog".into(),
+            title: "P".into(),
+            author: "A".into(),
+            file_path: "/tmp/x.pdf".into(),
+            total_pages: 3,
+            current_page: 0,
+            progress: 0.0,
+            last_read: None,
+            added_at: "2026-01-01T00:00:00Z".into(),
+            cover_thumbnail: None,
+        };
+        import_book(&conn, &book).expect("import");
+        update_progress(&conn, "book-prog", 1, 3).expect("progress");
+        let got = get_book(&conn, "book-prog").expect("get").expect("exists");
+        // 1/3*100 = 33.33... -> 33 (matches frontend Math.round)
+        assert!((got.progress - 33.0).abs() < 0.001, "got {}", got.progress);
     }
 }

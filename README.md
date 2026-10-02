@@ -198,13 +198,17 @@ bun tauri build         # Desktop installer
 - [x] Dark mode
 - [x] Keyboard shortcuts
 - [x] Command palette (Ctrl+K)
-- [ ] Drag & drop import
-- [ ] PWA support
-- [ ] Reading statistics
-- [ ] Folder import
-- [ ] Text-to-speech
-- [ ] Annotation/highlighting
-- [ ] Mobile responsive layout
+- [x] Drag & drop import (parcial — ver `Library.tsx:handleDrop`, polimento em #15)
+- [x] PWA support (instalável + offline IndexedDB — riscos e limites em `PWA-RISKS.md`)
+- [ ] Reading statistics (épico #17)
+- [ ] Folder import (épico #17)
+- [ ] Text-to-speech (épico #17)
+- [ ] Annotation/highlighting (épico #17)
+- [ ] Mobile responsive layout (parcial — breakpoints base prontos, swipe/pinch em #15/#17)
+
+> **PWA vs Tauri:** na Web os PDFs ficam em `IndexedDB` (limite 500MB, ver `pdfStorage.ts:MAX_OFFLINE_BYTES`)
+> com fallback offline via Service Worker; no Tauri usam `$APPDATA/books/` + `SQLite`
+> (`src-tauri/src/db.rs`). Detecção via `isTauri()` (`__TAURI_INTERNALS__`).
 
 ---
 

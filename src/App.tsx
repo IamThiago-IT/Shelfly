@@ -2,15 +2,17 @@ import { useEffect } from 'react'
 import { Layout } from './components/Layout'
 import { InstallPrompt } from './components/InstallPrompt'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { Toaster } from './components/Toaster'
 import { useAppStore } from './store/appStore'
 import { initTauri, isTauri } from './lib/tauri'
+import { logger } from './lib/logger'
 
 function App() {
   const theme = useAppStore((s) => s.theme)
 
   useEffect(() => {
     if (isTauri()) {
-      initTauri()
+      initTauri().catch((e) => logger.error('Failed to init Tauri APIs', e))
     }
   }, [])
 
@@ -42,6 +44,7 @@ function App() {
     <ErrorBoundary>
       <Layout />
       {!isTauri() && <InstallPrompt />}
+      <Toaster />
     </ErrorBoundary>
   )
 }

@@ -28,17 +28,56 @@ export async function pickPDFFiles(): Promise<string[]> {
   return paths
 }
 
+const RESERVED_WINDOWS_NAMES = new Set(
+  ['CON', 'PRN', 'AUX', 'NUL', 'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'],
+)
+
+/** Sanitize a filename for safe storage in $APPDATA/books (issue #12). */
+export function sanitizePdfFileName(raw: string): string {
+  const base = raw.split('\\').pop()?.split('/').pop()?.trim() || `document-${Date.now()}.pdf`
+  // strip path separators, control chars, and Windows-forbidden <>:"|?*
+  let clean = base.replace(/[\x00-\x1f<>:"|?*]/g, '_').replace(/\.\.+/g, '_')
+  if (!clean.toLowerCase().endsWith('.pdf')) {
+    clean = `${clean.replace(/\.[^.]*$/, '')}.pdf`
+  }
+  const stem = clean.replace(/\.pdf$/i, '')
+  if (RESERVED_WINDOWS_NAMES.has(stem.toUpperCase())) {
+    clean = `_${clean}`
+  }
+  // limit length to avoid OS errors (keep extension)
+  if (clean.length > 120) {
+    clean = `${clean.slice(0, 116 - 4)}.pdf`
+  }
+  return clean || `document-${Date.now()}.pdf`
+}
+
 export async function copyFileToAppDir(sourcePath: string): Promise<string> {
   if (!isTauri() || !fsApi || !tauriApi) throw new Error('Not in Tauri environment')
 
   const appDir = await tauriApi.invoke<string>('get_app_data_dir')
-  const fileName = sourcePath.split('\\').pop()?.split('/').pop() || `document-${Date.now()}.pdf`
-  const destPath = `${appDir}/books/${fileName}`
+  const fileName = sanitizePdfFileName(sourcePath)
+  let destPath = `${appDir}/books/${fileName}`
 
   try {
     await fsApi.mkdir(`${appDir}/books`, { recursive: true })
   } catch {
     // ignore if exists
+  }
+
+  // Avoid overwriting on name collision: doc.pdf -> doc_1.pdf (issue #12).
+  try {
+    if (await fsApi.exists(destPath)) {
+      const stem = fileName.replace(/\.pdf$/i, '')
+      for (let i = 1; i < 100; i++) {
+        const candidate = `${appDir}/books/${stem}_${i}.pdf`
+        if (!(await fsApi.exists(candidate))) {
+          destPath = candidate
+          break
+        }
+      }
+    }
+  } catch {
+    // if exists check fails, proceed with original destPath
   }
 
   await fsApi.copyFile(sourcePath, destPath)

@@ -3,7 +3,8 @@ import { useState, useEffect } from 'react'
 import { useAppStore } from '../store/appStore'
 import type { View } from '../types'
 import { cn } from '../lib/utils'
-import { getStorageEstimate } from '../lib/pdfStorage'
+import { getStorageEstimate, getTotalOfflineSize } from '../lib/pdfStorage'
+import { logger } from '../lib/logger'
 import { Button } from './ui/button'
 import { ScrollArea } from './ui/scroll-area'
 import { Separator } from './ui/separator'
@@ -27,8 +28,26 @@ export function Sidebar() {
 
   const recentCount = getRecentBooks().length
   const [storageInfo, setStorageInfo] = useState<{ usage: number; quota: number } | null>(null)
+  const [offlineTotal, setOfflineTotal] = useState<number | null>(null)
   useEffect(() => {
-    getStorageEstimate().then(setStorageInfo).catch(() => {})
+    let alive = true
+    getStorageEstimate()
+      .then((v) => {
+        if (alive) setStorageInfo(v)
+      })
+      .catch((e) => {
+        logger.warn('Storage estimate unavailable', e)
+      })
+    getTotalOfflineSize()
+      .then((v) => {
+        if (alive) setOfflineTotal(v)
+      })
+      .catch((e) => {
+        logger.warn('Offline size unavailable', e)
+      })
+    return () => {
+      alive = false
+    }
   }, [books.length])
 
   const storagePercent = storageInfo && storageInfo.quota > 0 ? Math.round((storageInfo.usage / storageInfo.quota) * 100) : 0
@@ -69,6 +88,7 @@ export function Sidebar() {
                 variant="ghost"
                 size="icon"
                 onClick={toggleSidebar}
+                aria-label={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
                 className={cn('hidden lg:flex shrink-0', !sidebarOpen && 'lg:flex')}
               >
                 <ChevronLeft className={cn('h-4 w-4 transition-transform', !sidebarOpen && 'rotate-180')} />
@@ -138,6 +158,7 @@ export function Sidebar() {
                 <Button
                   variant="ghost"
                   size="sm"
+                  aria-label="Search books (Ctrl+K)"
                   className={cn(
                     'w-full justify-start gap-3 h-10 px-3',
                     !sidebarOpen && 'lg:justify-center lg:px-0 lg:w-10 lg:h-10',
@@ -166,7 +187,7 @@ export function Sidebar() {
 
         <div className="p-2 border-t border-sidebar-border shrink-0 space-y-2">
           {storageInfo && sidebarOpen && (
-            <div className="px-3 py-2 rounded-md bg-sidebar-muted/50">
+            <div className="px-3 py-2 rounded-md bg-sidebar-muted/50" role="status" aria-live="polite">
               <div className="flex items-center gap-2 text-[11px] font-medium text-sidebar-muted-foreground">
                 <HardDrive className="w-3.5 h-3.5" />
                 Storage {storagePercent}%
@@ -176,6 +197,9 @@ export function Sidebar() {
               </div>
               <p className="text-[10px] text-sidebar-muted-foreground mt-1">
                 {(storageInfo.usage / 1024 / 1024).toFixed(1)} MB / {(storageInfo.quota / 1024 / 1024 / 1024).toFixed(1)} GB
+                {offlineTotal !== null && (
+                  <> · PDFs offline {(offlineTotal / 1024 / 1024).toFixed(1)} MB / 500 MB</>
+                )}
               </p>
             </div>
           )}
@@ -184,6 +208,7 @@ export function Sidebar() {
               <Button
                 variant="ghost"
                 size="sm"
+                aria-label="Settings"
                 className={cn(
                   'w-full justify-start gap-3 h-10 px-3 text-sidebar-muted-foreground',
                   !sidebarOpen && 'lg:justify-center lg:px-0 lg:w-10 lg:h-10',

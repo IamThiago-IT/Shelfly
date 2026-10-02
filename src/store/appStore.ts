@@ -3,7 +3,20 @@ import { persist } from 'zustand/middleware'
 import type { Book, Bookmark, ViewMode, SortBy, Theme, View, ReadingSession } from '../types'
 import { generateId } from '../lib/utils'
 import { savePDF, deletePDF, hasPDF, saveMetadata, deleteMetadata } from '../lib/pdfStorage'
-import { isTauri, readFileAsArrayBuffer } from '../lib/tauri'
+import { isTauri, readFileAsArrayBuffer, invokeTauri, revokeObjectUrl } from '../lib/tauri'
+import { logger } from '../lib/logger'
+
+/**
+ * Single source of truth for progress calculation.
+ * Must stay in sync with `src-tauri/src/db.rs::update_progress`
+ * (both use integer percent via Math.round / f64.round()).
+ * See issue #4.
+ */
+export function calculateProgress(page: number, totalPages: number): number {
+  if (!totalPages || totalPages <= 0) return 0
+  const clamped = Math.min(Math.max(page, 0), totalPages)
+  return Math.round((clamped / totalPages) * 100)
+}
 
 interface AppState {
   currentView: View
@@ -109,16 +122,30 @@ export const useAppStore = create<AppState>()(
       removeBook: (id) => {
         // also clean offline storage (fire & forget) and revoke blob URLs
         if (!isTauri()) {
-          deletePDF(id).catch(() => {})
-          deleteMetadata(id).catch(() => {})
+          deletePDF(id).catch((e) => logger.error(`Failed to delete offline PDF ${id}`, e))
+          deleteMetadata(id).catch((e) => logger.error(`Failed to delete offline metadata ${id}`, e))
         } else {
-          // Tauri: could delete file from app_data_dir/books if needed
+          // Tauri: delete DB rows + physical file via Rust `remove_book`
+          // (handles file_path lookup + std::fs::remove_file, NotFound = success).
+          // Fire-and-forget to keep removeBook sync; errors are logged, UI stays
+          // responsive. Frontend also revokes blob URLs below.
+          invokeTauri('remove_book', { id }).catch((e) =>
+            logger.error(`Failed to remove Tauri book ${id}`, e),
+          )
         }
         // revoke any tracked object URLs
         try {
           const book = get().books.find((b) => b.id === id)
           if (book?.filePath.startsWith('blob:')) URL.revokeObjectURL(book.filePath)
-        } catch {}
+        } catch (e) {
+          logger.warn('Failed to revoke object URL', e)
+        }
+        // also revoke tracked Tauri blob URLs
+        try {
+          revokeObjectUrl(id)
+        } catch {
+          // ignore
+        }
         set((s) => ({
           books: s.books.filter((b) => b.id !== id),
           bookmarks: s.bookmarks.filter((bm) => bm.bookId !== id),
@@ -130,7 +157,7 @@ export const useAppStore = create<AppState>()(
 
       updateProgress: (bookId, page, totalPages) =>
         set((s) => {
-          const progress = Math.round((page / totalPages) * 100)
+          const progress = calculateProgress(page, totalPages)
           return {
             books: s.books.map((b) =>
               b.id === bookId
@@ -313,7 +340,9 @@ export const useAppStore = create<AppState>()(
             savedAt: new Date().toISOString(),
           })
         } catch (error) {
-          console.error("Failed to save PDF offline:", error)
+          logger.error(`Failed to save PDF offline ${bookId}`, error)
+          // Re-throw so BookCard can show Toast with retry (issues #3, #8).
+          throw error instanceof Error ? error : new Error('Failed to save offline')
         }
       },
 
@@ -323,7 +352,8 @@ export const useAppStore = create<AppState>()(
           await deletePDF(bookId)
           await deleteMetadata(bookId)
         } catch (error) {
-          console.error("Failed to remove PDF offline:", error)
+          logger.error(`Failed to remove PDF offline ${bookId}`, error)
+          throw error instanceof Error ? error : new Error('Failed to remove offline copy')
         }
       },
 
@@ -340,8 +370,36 @@ export const useAppStore = create<AppState>()(
       name: 'shelfly-storage',
       version: 1,
       migrate: (persistedState, version) => {
-        // future migrations go here
-        if (version === 0) return persistedState as AppState
+        const state = persistedState as Partial<AppState> & Record<string, unknown>
+        // v0 -> v1: ensure new reader prefs exist, drop invalid books/bookmarks,
+        // clamp progress to 0-100 int (see calculateProgress / issue #4).
+        if (version === 0 || version === undefined) {
+          const books = Array.isArray(state.books)
+            ? (state.books as Book[]).filter((b) => b?.id && b?.title).map((b) => ({
+                ...b,
+                progress: Math.min(100, Math.max(0, Math.round(b.progress ?? 0))),
+              }))
+            : []
+          const bookmarks = Array.isArray(state.bookmarks)
+            ? (state.bookmarks as Bookmark[]).filter((bm) => bm?.id && bm?.bookId)
+            : []
+          const readingSessions =
+            state.readingSessions && typeof state.readingSessions === 'object'
+              ? (state.readingSessions as Record<string, ReadingSession>)
+              : {}
+          return {
+            ...(state as object),
+            books,
+            bookmarks,
+            readingSessions,
+            theme: (state.theme as Theme) ?? 'system',
+            readerMode: (state.readerMode as ViewMode) ?? 'continuous',
+            scale: typeof state.scale === 'number' ? state.scale : 1,
+            brightness: typeof state.brightness === 'number' ? state.brightness : 100,
+            fontSize: typeof state.fontSize === 'number' ? state.fontSize : 16,
+            sidebarOpen: state.sidebarOpen ?? true,
+          } as AppState
+        }
         return persistedState as AppState
       },
       partialize: (state) => ({

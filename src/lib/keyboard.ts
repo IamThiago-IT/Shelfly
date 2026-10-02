@@ -20,6 +20,17 @@ export function useKeyboardShortcuts(
 
     const handler = (e: Event) => {
       const ke = e as KeyboardEvent
+      // Don't trigger shortcuts while typing in inputs/textareas/selects or contentEditable
+      const target = ke.target as HTMLElement | null
+      if (
+        target &&
+        (target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement ||
+          target instanceof HTMLSelectElement ||
+          target.isContentEditable)
+      ) {
+        return
+      }
       for (const shortcut of shortcuts) {
         if (shortcut.enabled === false) continue
 

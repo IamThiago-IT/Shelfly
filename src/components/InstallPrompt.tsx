@@ -7,12 +7,31 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>
 }
 
+const DISMISS_KEY = 'shelfly-install-dismissed'
+const DISMISS_TTL_DAYS = 30
+
+function isDismissed(): boolean {
+  try {
+    const raw = localStorage.getItem(DISMISS_KEY)
+    if (!raw) return false
+    // Back-compat with legacy boolean flag: treat as expired (re-prompt).
+    if (raw === 'true' || raw === 'false') return false
+    const { at, version } = JSON.parse(raw) as { at: number; version?: string }
+    // Expire after 30 days or when app version changes.
+    const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.2.0'
+    if (version && version !== appVersion) return false
+    return Date.now() - at < DISMISS_TTL_DAYS * 24 * 60 * 60 * 1000
+  } catch {
+    return false
+  }
+}
+
+declare const __APP_VERSION__: string | undefined
+
 export function InstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [showPrompt, setShowPrompt] = useState(false)
-  const [dismissed, setDismissed] = useState(() => {
-    return localStorage.getItem('shelfly-install-dismissed') === 'true'
-  })
+  const [dismissed, setDismissed] = useState<boolean>(() => isDismissed())
 
   useEffect(() => {
     if (dismissed) return
@@ -40,7 +59,12 @@ export function InstallPrompt() {
   function handleDismiss() {
     setShowPrompt(false)
     setDismissed(true)
-    localStorage.setItem('shelfly-install-dismissed', 'true')
+    try {
+      const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.2.0'
+      localStorage.setItem(DISMISS_KEY, JSON.stringify({ at: Date.now(), version: appVersion }))
+    } catch {
+      // ignore storage errors
+    }
   }
 
   if (!showPrompt || dismissed) return null

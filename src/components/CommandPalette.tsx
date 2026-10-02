@@ -19,8 +19,9 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const openBook = useAppStore((s) => s.openBook)
   const setCurrentView = useAppStore((s) => s.setCurrentView)
   const setSearchQuery = useAppStore((s) => s.setSearchQuery)
+  const getRecentBooks = useAppStore((s) => s.getRecentBooks)
 
-  const recentBooks = books.filter((b) => b.lastRead).slice(0, 5)
+  const recentBooks = getRecentBooks().slice(0, 5)
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange}>
@@ -40,7 +41,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           </CommandItem>
           <CommandItem
             onSelect={() => {
-              setCurrentView('library')
+              setCurrentView('recent')
               onOpenChange(false)
             }}
           >
@@ -49,7 +50,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           </CommandItem>
           <CommandItem
             onSelect={() => {
-              setCurrentView('library')
+              setCurrentView('bookmarks')
               onOpenChange(false)
             }}
           >

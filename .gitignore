@@ -19,7 +19,8 @@ vite.config.d.ts
 
 # Rust / Tauri
 src-tauri/target/
-src-tauri/Cargo.lock
+# Keep Cargo.lock for reproducible builds (see issue #6).
+# src-tauri/Cargo.lock
 
 # Env
 .env

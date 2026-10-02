@@ -7,6 +7,8 @@ import { getPDFMeta, generateThumbnail } from '../lib/pdf'
 import { isTauri, pickPDFFiles, copyFileToAppDir } from '../lib/tauri'
 import { savePDF, saveMetadata } from '../lib/pdfStorage'
 import { readFileAsDataUrl } from '../lib/tauri'
+import { logger } from '../lib/logger'
+import { toast } from '../lib/toast'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import {
@@ -26,6 +28,9 @@ export function Library() {
   const setSearchQuery = useAppStore((s) => s.setSearchQuery)
   const sortBy = useAppStore((s) => s.sortBy)
   const setSortBy = useAppStore((s) => s.setSortBy)
+  // Single source of truth for filtering/sorting (see appStore.getFilteredBooks).
+  // Subscribes to books/searchQuery/sortBy via selector so list stays reactive.
+  const filteredBooks = useAppStore((s) => s.getFilteredBooks())
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
@@ -40,28 +45,6 @@ export function Library() {
     return () => clearTimeout(t)
   }, [searchInput, setSearchQuery])
   useEffect(() => setSearchInput(searchQuery), [searchQuery])
-
-  const filteredBooks = (() => {
-    let filtered = books
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase()
-      filtered = filtered.filter((b) => b.title.toLowerCase().includes(q) || b.author.toLowerCase().includes(q))
-    }
-    switch (sortBy) {
-      case 'lastRead':
-        return [...filtered].sort((a, b) => {
-          if (!a.lastRead) return 1
-          if (!b.lastRead) return -1
-          return new Date(b.lastRead).getTime() - new Date(a.lastRead).getTime()
-        })
-      case 'title':
-        return [...filtered].sort((a, b) => a.title.localeCompare(b.title))
-      case 'progress':
-        return [...filtered].sort((a, b) => b.progress - a.progress)
-      default:
-        return filtered
-    }
-  })()
 
   useEffect(() => {
     const handler = () => setCommandOpen(true)
@@ -124,13 +107,18 @@ export function Library() {
           coverThumbnail: thumbnail || undefined,
         })
       } catch (err) {
-        console.error(`Failed to load PDF: ${file.name}`, err)
+        logger.error(`Failed to load PDF: ${file.name}`, err)
+        const msg = err instanceof Error ? err.message : 'Unknown error'
+        toast.error(`Failed to import ${file.name}`, msg)
       } finally {
         URL.revokeObjectURL(blobUrl)
       }
     }
 
-    if (newBooks.length > 0) addBooks(newBooks)
+    if (newBooks.length > 0) {
+      addBooks(newBooks)
+      toast.success(`Imported ${newBooks.length} book${newBooks.length === 1 ? '' : 's'}`)
+    }
     // reset input so same file can be re-selected
     if (fileInputRef.current) fileInputRef.current.value = ''
     setImporting(false)
@@ -181,7 +169,8 @@ export function Library() {
         }])
       }
     } catch (err) {
-      console.error('Import failed:', err)
+      logger.error('Tauri import failed', err)
+      toast.error('Import failed', err instanceof Error ? err.message : 'Unknown error')
     }
     setImporting(false)
   }
@@ -234,9 +223,10 @@ export function Library() {
                 ref={searchRef}
                 type="text"
                 placeholder="Search by title or author..."
+                aria-label="Search books by title or author"
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
-                className="pl-9 h-9"
+                className="pl-9 pr-9 h-9"
               />
               <svg
                 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground"
@@ -251,6 +241,20 @@ export function Library() {
                 <circle cx="11" cy="11" r="8" />
                 <path d="m21 21-4.3-4.3" />
               </svg>
+              {searchInput && (
+                <button
+                  type="button"
+                  aria-label="Clear search"
+                  onClick={() => {
+                    setSearchInput('')
+                    setSearchQuery('')
+                    searchRef.current?.focus()
+                  }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted"
+                >
+                  ×
+                </button>
+              )}
             </div>
             <Select value={sortBy} onValueChange={(v) => setSortBy(v as 'lastRead' | 'title' | 'progress')}>
               <SelectTrigger className="w-full sm:w-[140px] h-9">

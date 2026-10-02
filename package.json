@@ -8,8 +8,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "typecheck": "tsc -b --noEmit",
-    "lint": "tsc -b --noEmit"
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
+    "lint": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json"
   },
   "packageManager": "bun@1.2.0",
   "dependencies": {

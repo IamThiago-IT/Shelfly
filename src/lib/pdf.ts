@@ -27,13 +27,21 @@ export async function loadPDFDocumentFromBuffer(data: ArrayBuffer): Promise<pdfj
 
 export async function getPDFMeta(filePath: string): Promise<PDFMeta> {
   const doc = await loadPDFDocument(filePath)
-  const meta = await doc.getMetadata()
-  const info = meta.info as Record<string, unknown>
+  try {
+    const meta = await doc.getMetadata()
+    const info = meta.info as Record<string, unknown>
 
-  return {
-    title: (info?.Title as string) || filePath.split('/').pop()?.split('\\').pop()?.replace(/\.pdf$/i, '') || 'Untitled',
-    author: (info?.Author as string) || 'Unknown Author',
-    totalPages: doc.numPages,
+    return {
+      title: (info?.Title as string) || filePath.split('/').pop()?.split('\\').pop()?.replace(/\.pdf$/i, '') || 'Untitled',
+      author: (info?.Author as string) || 'Unknown Author',
+      totalPages: doc.numPages,
+    }
+  } finally {
+    try {
+      await doc.destroy()
+    } catch {
+      // ignore destroy errors (already destroyed / worker terminated)
+    }
   }
 }
 
@@ -63,8 +71,9 @@ export async function generateThumbnail(
   filePath: string,
   maxWidth: number = 200,
 ): Promise<string | null> {
+  let doc: pdfjsLib.PDFDocumentProxy | null = null
   try {
-    const doc = await loadPDFDocument(filePath)
+    doc = await loadPDFDocument(filePath)
     const page = await doc.getPage(1)
     const originalViewport = page.getViewport({ scale: 1 })
     const scale = maxWidth / originalViewport.width
@@ -77,8 +86,27 @@ export async function generateThumbnail(
     if (!ctx) return null
 
     await page.render({ canvasContext: ctx, viewport }).promise
-    return canvas.toDataURL('image/webp', 0.6)
+    // cleanup page resources promptly
+    try {
+      page.cleanup()
+    } catch {
+      // ignore
+    }
+    try {
+      return canvas.toDataURL('image/webp', 0.6)
+    } catch {
+      // WebP not supported -> fallback jpeg
+      return canvas.toDataURL('image/jpeg', 0.7)
+    }
   } catch {
     return null
+  } finally {
+    if (doc) {
+      try {
+        await doc.destroy()
+      } catch {
+        // ignore destroy errors
+      }
+    }
   }
 }

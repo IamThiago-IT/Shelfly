@@ -3,6 +3,25 @@ const DB_VERSION = 1;
 const PDF_STORE = "pdf-files";
 const METADATA_STORE = "pdf-metadata";
 
+/** Max offline payload (issue #3, see PWA-RISKS.md): 500MB selective offline. */
+export const MAX_OFFLINE_BYTES = 500 * 1024 * 1024;
+
+export class QuotaExceededAppError extends Error {
+  readonly neededBytes: number;
+  readonly usageBytes: number;
+  constructor(neededBytes: number, usageBytes: number) {
+    super(
+      `Offline storage limit (500MB) would be exceeded. ` +
+        `Need ${(neededBytes / 1024 / 1024).toFixed(1)}MB, ` +
+        `already using ${(usageBytes / 1024 / 1024).toFixed(1)}MB. ` +
+        `Remove some offline books to free space.`,
+    );
+    this.name = 'QuotaExceededError';
+    this.neededBytes = neededBytes;
+    this.usageBytes = usageBytes;
+  }
+}
+
 let db: IDBDatabase | null = null;
 
 function openDB(): Promise<IDBDatabase> {
@@ -30,13 +49,39 @@ function openDB(): Promise<IDBDatabase> {
 }
 
 export async function savePDF(id: string, data: ArrayBuffer): Promise<void> {
+  const size = data?.byteLength ?? 0;
+  // Pre-check quota before writing (issue #3): fail fast with friendly error.
+  try {
+    const [estimate, total] = await Promise.all([
+      getStorageEstimate().catch(() => null),
+      getTotalOfflineSize().catch(() => 0),
+    ]);
+    const usage = estimate?.usage ?? total;
+    if (usage + size > MAX_OFFLINE_BYTES) {
+      throw new QuotaExceededAppError(size, usage);
+    }
+    // Also respect browser quota when known.
+    if (estimate && estimate.quota > 0 && usage + size > estimate.quota) {
+      throw new QuotaExceededAppError(size, usage);
+    }
+  } catch (e) {
+    if (e instanceof QuotaExceededAppError) throw e;
+    // If estimate fails, proceed to write and let IndexedDB enforce quota.
+  }
   const database = await openDB();
   return new Promise((resolve, reject) => {
     const tx = database.transaction(PDF_STORE, "readwrite");
     const store = tx.objectStore(PDF_STORE);
     const request = store.put(data, id);
     request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
+    request.onerror = () => {
+      const err = request.error as (DOMException & { name?: string }) | null;
+      if (err?.name === 'QuotaExceededError') {
+        reject(new QuotaExceededAppError(size, size));
+      } else {
+        reject(err);
+      }
+    };
   });
 }
 

@@ -26,7 +26,7 @@ export function Layout() {
         <Sidebar />
         <main className="flex-1 flex overflow-hidden relative">
           {isOffline && (
-            <div className="absolute top-2 right-2 z-50 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-yellow-500/10 border border-yellow-500/20 text-yellow-600 dark:text-yellow-400">
+            <div role="status" aria-live="polite" className="absolute top-2 right-2 z-50 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-yellow-500/10 border border-yellow-500/20 text-yellow-600 dark:text-yellow-400">
               <WifiOff className="w-3.5 h-3.5" />
               <span className="text-xs font-medium">Offline</span>
             </div>
