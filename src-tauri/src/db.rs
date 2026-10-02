@@ -166,18 +166,31 @@ pub fn get_book(conn: &Connection, id: &str) -> Result<Option<Book>> {
 
 pub fn remove_book(conn: &Connection, id: &str) -> Result<()> {
     // Fetch file_path BEFORE delete so we can clean the orphan PDF (issue #2).
-    // Do all DB deletes in one implicit transaction scope; file removal is
-    // best-effort after commit (NotFound == success).
     let file_path: Option<String> = conn
         .query_row("SELECT file_path FROM books WHERE id = ?1", params![id], |row| {
             row.get(0)
         })
         .ok();
 
-    conn.execute("DELETE FROM bookmarks WHERE book_id = ?1", params![id])?;
-    conn.execute("DELETE FROM reading_sessions WHERE book_id = ?1", params![id])?;
-    conn.execute("DELETE FROM books WHERE id = ?1", params![id])?;
+    // All DB deletes in a single transaction: no partial state (issue #2).
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let result: Result<()> = (|| {
+        conn.execute("DELETE FROM bookmarks WHERE book_id = ?1", params![id])?;
+        conn.execute("DELETE FROM reading_sessions WHERE book_id = ?1", params![id])?;
+        conn.execute("DELETE FROM books WHERE id = ?1", params![id])?;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            conn.execute_batch("COMMIT")?;
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(e);
+        }
+    }
 
+    // Best-effort file removal AFTER commit (NotFound == success).
     if let Some(path) = file_path {
         // Only delete files inside the expected books dir to avoid path traversal.
         // If path doesn't look like a shelly book file, skip silently.
@@ -474,6 +487,28 @@ mod tests {
         let conn = setup_conn();
         let result = import_all_data(&conn, "{not-json}");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn import_all_data_skips_malicious_entries() {
+        let conn = setup_conn();
+        let big_thumb = "a".repeat(2 * 1024 * 1024);
+        let payload = serde_json::json!({
+            "books": [
+                { "id": "", "title": "", "author": "x", "file_path": "", "total_pages": 1, "current_page": 0, "progress": 0.0, "added_at": "2026-01-01T00:00:00Z" },
+                { "id": "evil", "title": "Evil", "author": "x", "file_path": "/etc/passwd", "total_pages": -5, "current_page": -1, "progress": 0.0, "added_at": "2026-01-01T00:00:00Z" },
+                { "id": "big", "title": "Big", "author": "x", "file_path": "/tmp/big.pdf", "total_pages": 10, "current_page": 1, "progress": 10.0, "added_at": "2026-01-01T00:00:00Z", "cover_thumbnail": big_thumb },
+                { "id": "good", "title": "Good", "author": "x", "file_path": "/tmp/good.pdf", "total_pages": 10, "current_page": 1, "progress": 10.0, "added_at": "2026-01-01T00:00:00Z" },
+            ],
+            "bookmarks": [],
+            "readingSessions": [],
+        });
+        import_all_data(&conn, &payload.to_string()).expect("import must not fail on bad rows");
+        let books = get_all_books(&conn).expect("books");
+        // Only "big" (thumbnail stripped) and "good" survive validation.
+        assert_eq!(books.len(), 2);
+        let big = books.iter().find(|b| b.id == "big").expect("big book");
+        assert!(big.cover_thumbnail.is_none(), "oversized thumbnail must be stripped");
     }
 
     #[test]

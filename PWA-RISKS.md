@@ -4,11 +4,11 @@
 
 ### 1. Tamanho do IndexedDB
 - **Problema:** PDFs grandes podem consumir muito espaço de armazenamento
-- **Mitigação atual:** Sem limite implementado
-- **Melhoria futura:** 
-  - Adicionar limite de tamanho total (ex: 500MB)
-  - Mostrar uso de armazenamento ao usuário
-  - Permitir limpeza seletiva de PDFs offline
+- **Mitigação atual:** Limite de 500MB (`MAX_OFFLINE_BYTES` em `src/lib/pdfStorage.ts`), pre-check em `savePDF` com erro amigável `QuotaExceededError`, indicador de uso na Sidebar (global + MB offline) e remoção seletiva via `removeBookOffline` (concluído — ver issue #3)
+- **Melhoria futura:**
+  - ~~Adicionar limite de tamanho total (ex: 500MB)~~ ✅ feito
+  - ~~Mostrar uso de armazenamento ao usuário~~ ✅ feito (Sidebar)
+  - ~~Permitir limpeza seletiva de PDFs offline~~ ✅ feito (menu do BookCard)
 
 ### 2. Performance com ArrayBuffer
 - **Problema:** ArrayBuffer grande pode causar lentidão na leitura/escrita
@@ -35,24 +35,29 @@
 
 ### 5. Atualização do Service Worker
 - **Problema:** SW com `autoUpdate` pode causar problemas se houver mudança no store
-- **Mitigação atual:** `registerType: 'autoUpdate'`
+- **Mitigação atual:** `registerType: 'autoUpdate'` + `migrate` versionado no Zustand (`version: 1`, v0→v1 normaliza books/bookmarks/sessions e fixa `progress` int — ver issue #4) e `PRAGMA user_version=1` no SQLite
 - **Melhoria futura:**
   - Considerar `prompt` para atualizações
-  - Implementar migração de dados se necessário
+  - ~~Implementar migração de dados se necessário~~ ✅ base pronta (ver "Estratégia de migração" abaixo)
   - Testes de atualização entre versões
+
+### Estratégia de migração (issue #4)
+- **Zustand (`shelfly-storage`, `version: 1`):** `migrate(persistedState, version)` com `switch` por versão; v0→v1 filtra livros/bookmarks inválidos, garante defaults de `theme/readerMode/scale/brightness/fontSize/sidebarOpen` e fixa `progress` em int 0–100 (fonte única: `calculateProgress` em `src/store/appStore.ts`).
+- **SQLite:** `PRAGMA user_version=1; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;` em `init_db`; futuras mudanças de schema devem bumpar `user_version` com `ALTER TABLE` guardado por versão.
+- **Progresso:** inteiro percentual nas duas pontas (`Math.round` no TS, `.round().clamp(0,100)` no Rust) para export/import não divergir.
 
 ---
 
 ## Melhorias Futuras
 
 ### Prioridade Alta
-- [ ] **Limite de armazenamento:** Implementar limite de tamanho total para PDFs offline
-- [ ] **Indicador de uso:** Mostrar ao usuário quanto espaço está sendo usado
-- [ ] **Limpeza seletiva:** Permitir remover PDFs offline individualmente
-- [ ] **Tratamento de erros:** Melhorar mensagens de erro para problemas de armazenamento
+- [x] **Limite de armazenamento:** Implementar limite de tamanho total para PDFs offline (500MB — issue #3)
+- [x] **Indicador de uso:** Mostrar ao usuário quanto espaço está sendo usado (Sidebar — issue #3)
+- [x] **Limpeza seletiva:** Permitir remover PDFs offline individualmente (BookCard — issue #3)
+- [x] **Tratamento de erros:** Melhorar mensagens de erro para problemas de armazenamento (Toast + logger — issues #3/#8)
 
 ### Prioridade Média
-- [ ] **Ícones PWA:** Criar ícones de alta resolução (192x192, 512x512)
+- [x] **Ícones PWA:** Criar ícones de alta resolução (192x192, 512x512) — existem em `public/`, manifest corrigido (`purpose` + `theme_color` dinâmico — issue #11)
 - [ ] **Splash screen:** Adicionar splash screen personalizada
 - [ ] **Background sync:** Sincronizar dados quando voltar online
 - [ ] **Push notifications:** Notificar sobre atualizações de PDFs

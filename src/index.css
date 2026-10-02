@@ -100,3 +100,15 @@
     background: hsl(var(--muted-foreground) / 0.3);
   }
 }
+
+/* A11y (issue #14): respect prefers-reduced-motion — disable tailwindcss-animate transitions. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
